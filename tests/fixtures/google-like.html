@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+      }
+      #search {
+        margin-top: 20px;
+      }
+      .g {
+        margin: 12px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Google</h1>
+    <form id="tsf" role="search">
+      <textarea id="APjFqb" name="q" aria-label="Search" rows="2"></textarea>
+      <button id="search-button" type="submit">Google Search</button>
+    </form>
+
+    <div id="search">
+      <div class="g">
+        <a id="result-1" href="#result-1"><h3>Playwrong Documentation</h3></a>
+      </div>
+      <div class="g">
+        <a id="result-2" href="#result-2"><h3>Bridge API Reference</h3></a>
+      </div>
+      <div class="g">
+        <a id="result-3" href="#result-3"><h3>LLM Automation Guide</h3></a>
+      </div>
+    </div>
+    <div id="nav">
+      <a id="pnnext" href="?q=&start=10">Next</a>
+    </div>
+
+    <script>
+      window.__searchSubmitted = false;
+      window.__searchQuery = "";
+      window.__clickedHref = "";
+      window.__nextClicked = false;
+
+      const form = document.getElementById("tsf");
+      const input = document.getElementById("APjFqb");
+      const search = document.getElementById("search");
+      const next = document.getElementById("pnnext");
+
+      function renderResults(pageNo, query) {
+        search.innerHTML = "";
+        for (let i = 1; i <= 3; i += 1) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "g";
+          const a = document.createElement("a");
+          a.id = `result-p${pageNo}-${i}`;
+          a.href = `#p${pageNo}-result-${i}`;
+          const h3 = document.createElement("h3");
+          const prefix = query ? `${query} - ` : "";
+          h3.textContent = `${prefix}Result ${i} (page ${pageNo})`;
+          a.appendChild(h3);
+          a.addEventListener("click", (event) => {
+            event.preventDefault();
+            window.__clickedHref = a.getAttribute("href") || "";
+          });
+          wrapper.appendChild(a);
+          search.appendChild(wrapper);
+        }
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        window.__searchSubmitted = true;
+        window.__searchQuery = input.value;
+        const q = encodeURIComponent(input.value || "");
+        history.pushState({}, "", `/google-like.html?q=${q}`);
+        next.setAttribute("href", `/google-like.html?q=${q}&start=10`);
+        window.__nextClicked = false;
+        renderResults(1, input.value);
+      });
+
+      document.querySelectorAll("#search a").forEach((a) => {
+        a.addEventListener("click", (event) => {
+          event.preventDefault();
+          window.__clickedHref = a.getAttribute("href") || "";
+        });
+      });
+
+      next.addEventListener("click", (event) => {
+        event.preventDefault();
+        window.__nextClicked = true;
+        const q = encodeURIComponent(input.value || window.__searchQuery || "");
+        history.pushState({}, "", `/google-like.html?q=${q}&start=10`);
+        renderResults(2, input.value || window.__searchQuery || "");
+      });
+    </script>
+  </body>
+</html>

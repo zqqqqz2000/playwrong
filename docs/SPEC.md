@@ -18,6 +18,7 @@
 - `apps/server`: 会话核心、快照管理、HTTP API、扩展 WebSocket RPC 网关。
 - `apps/cli`: 面向人类/LLM 的命令行入口，负责同步、文件投影与动作调用。
 - `apps/extension`: Chrome 插件运行时（`background + content script`），负责提取与执行。
+  - 内置站点脚本：`google.search / bing.search / duckduckgo.search`，未命中时回退通用抽取器。
 
 ## 4. 职责边界（关键）
 - 插件输入：URL/标题/信号上下文。
@@ -98,3 +99,4 @@
 - 单元测试：匹配、定位、投影、核心状态机。
 - E2E 测试：pull/apply/call 全链路、多页面、冲突。
 - 网页匹配逻辑：参数化海量用例（host/path/query/signals/title）。
+- 真实浏览器联调：`bun run test:e2e:browser-google`（扩展 + server + CLI 协议 + 页面状态变化观测）。

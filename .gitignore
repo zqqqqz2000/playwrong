@@ -2,6 +2,7 @@ node_modules/
 .bun/
 .bridge/
 .bridge-e2e/
+.bridge-e2e-google/
 tmp/
 *.log
 *.tsbuildinfo

@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
-    "test:e2e": "bun test tests/e2e"
+    "test:e2e": "bun test tests/e2e",
+    "test:e2e:browser-google": "bun tests/e2e/browser-google-flow.ts",
+    "test:e2e:browser-google:real": "PLAYWRONG_E2E_TARGET=real-google bun tests/e2e/browser-google-flow.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",

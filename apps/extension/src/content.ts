@@ -1,11 +1,15 @@
+import type { MatchContext } from "@playwrong/plugin-sdk";
 import type {
   FunctionCallDef,
   LocatorSpec,
   LocatorStrategy,
+  PluginExtractResult,
   ScalarValue,
   SemanticNode
 } from "@playwrong/protocol";
 import type { ContentBridgeError, ContentBridgeRequest, ContentBridgeResponse } from "./messages";
+import { ExtensionPluginHost } from "./plugin-host";
+import { createBuiltinSiteScripts } from "./site-scripts";
 
 interface LocalExtractResult {
   pageType: string;
@@ -17,6 +21,12 @@ interface LocalExtractResult {
 
 const INTERACTIVE_SELECTOR =
   "input,textarea,select,button,a[href],[contenteditable='true'],[role='button'],[role='textbox'],[role='link']";
+const SEARCH_QUERY_SELECTOR = "input[name='q'],textarea[name='q']";
+const SEARCH_SUBMIT_SELECTOR = "button[type='submit'],input[type='submit'],input[name='btnK']";
+const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
+
+const pluginHost = new ExtensionPluginHost(createBuiltinSiteScripts());
+let latestTree: SemanticNode[] = [];
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -84,6 +94,83 @@ function isInteractiveElement(element: Element): boolean {
 function inferPageType(pathname: string): string {
   const first = pathname.split("/").filter(Boolean)[0];
   return first ? slugify(first) : "index";
+}
+
+function defaultPageCalls(): FunctionCallDef[] {
+  return [
+    { name: "refresh", sideEffect: true },
+    {
+      name: "scrollTo",
+      sideEffect: true,
+      argsSchema: {
+        type: "object",
+        properties: {
+          top: { type: "number" },
+          left: { type: "number" }
+        }
+      }
+    },
+    {
+      name: "goto",
+      sideEffect: true,
+      argsSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string" }
+        },
+        required: ["url"]
+      }
+    }
+  ];
+}
+
+function collectMatchSignals(): string[] {
+  const signals: string[] = [];
+
+  if (document.querySelector(SEARCH_QUERY_SELECTOR)) {
+    signals.push("has:search.query");
+  }
+  if (document.querySelector(SEARCH_SUBMIT_SELECTOR)) {
+    signals.push("has:search.submit");
+  }
+  if (document.querySelector(SEARCH_RESULT_SELECTOR)) {
+    signals.push("has:search.results");
+  }
+
+  if (document.querySelector("form")) {
+    signals.push("has:form");
+  }
+  if (document.querySelector("input[type='password']")) {
+    signals.push("has:input.password");
+  }
+  if (document.querySelector("button[type='submit'],input[type='submit']")) {
+    signals.push("has:submit");
+  }
+
+  return signals;
+}
+
+function createMatchContext(): MatchContext {
+  return {
+    url: new URL(window.location.href),
+    title: document.title,
+    signals: collectMatchSignals()
+  };
+}
+
+function isPluginMiss(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code === "PLUGIN_MISS") {
+      return true;
+    }
+  }
+
+  if (error instanceof Error && error.message === "PLUGIN_MISS") {
+    return true;
+  }
+
+  return false;
 }
 
 function getAssociatedLabel(element: Element): string {
@@ -343,7 +430,7 @@ function collectNodesFromElements(
   return nodes;
 }
 
-function extractTree(): LocalExtractResult {
+function extractGenericTree(): LocalExtractResult {
   const usedIds = new Set<string>();
   const roots: SemanticNode[] = [];
   const consumed = new Set<Element>();
@@ -399,34 +486,38 @@ function extractTree(): LocalExtractResult {
   return {
     pageType: inferPageType(window.location.pathname),
     tree: roots,
-    pageCalls: [
-      { name: "refresh", sideEffect: true },
-      {
-        name: "scrollTo",
-        sideEffect: true,
-        argsSchema: {
-          type: "object",
-          properties: {
-            top: { type: "number" },
-            left: { type: "number" }
-          }
-        }
-      },
-      {
-        name: "goto",
-        sideEffect: true,
-        argsSchema: {
-          type: "object",
-          properties: {
-            url: { type: "string" }
-          },
-          required: ["url"]
-        }
-      }
-    ],
+    pageCalls: defaultPageCalls(),
     url: window.location.href,
     title: document.title
   };
+}
+
+async function extractTree(): Promise<LocalExtractResult> {
+  const matchContext = createMatchContext();
+  let pluginResult: PluginExtractResult | null = null;
+
+  try {
+    pluginResult = await pluginHost.extract(matchContext);
+  } catch (error) {
+    if (!isPluginMiss(error)) {
+      throw error;
+    }
+  }
+
+  if (pluginResult && pluginResult.tree.length > 0) {
+    latestTree = pluginResult.tree;
+    return {
+      pageType: pluginResult.pageType,
+      tree: pluginResult.tree,
+      pageCalls: pluginResult.pageCalls ?? defaultPageCalls(),
+      url: window.location.href,
+      title: document.title
+    };
+  }
+
+  const fallback = extractGenericTree();
+  latestTree = fallback.tree;
+  return fallback;
 }
 
 function runXPath(query: string): Element[] {
@@ -710,15 +801,27 @@ function toErrorPayload(error: unknown): ContentBridgeError {
 chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, sendResponse) => {
   void (async () => {
     if (message.type === "bridge.extract") {
-      const result = extractTree();
+      const result = await extractTree();
       const response: ContentBridgeResponse<LocalExtractResult> = { ok: true, result };
       sendResponse(response);
       return;
     }
 
     if (message.type === "bridge.setValue") {
-      const element = resolveElement(message.target, message.locator);
-      setElementValue(element, message.value);
+      let handledByPlugin = false;
+      try {
+        await pluginHost.setValue(createMatchContext(), latestTree, message.target, message.value);
+        handledByPlugin = true;
+      } catch (error) {
+        if (!isPluginMiss(error)) {
+          throw error;
+        }
+      }
+
+      if (!handledByPlugin) {
+        const element = resolveElement(message.target, message.locator);
+        setElementValue(element, message.value);
+      }
       const response: ContentBridgeResponse<{ ok: true }> = {
         ok: true,
         result: { ok: true }
@@ -729,11 +832,24 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
 
     if (message.type === "bridge.call") {
       let output: unknown;
-      if (message.target.id === "page") {
-        output = executePageCall(message.fn, message.args);
-      } else {
-        const element = resolveElement(message.target, message.locator);
-        output = executeElementCall(element, message.fn, message.args);
+      let handledByPlugin = false;
+
+      try {
+        output = await pluginHost.call(createMatchContext(), latestTree, message.target, message.fn, message.args);
+        handledByPlugin = true;
+      } catch (error) {
+        if (!isPluginMiss(error)) {
+          throw error;
+        }
+      }
+
+      if (!handledByPlugin) {
+        if (message.target.id === "page") {
+          output = executePageCall(message.fn, message.args);
+        } else {
+          const element = resolveElement(message.target, message.locator);
+          output = executeElementCall(element, message.fn, message.args);
+        }
       }
       const response: ContentBridgeResponse<{ output?: unknown }> = {
         ok: true,
