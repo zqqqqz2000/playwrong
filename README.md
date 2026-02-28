@@ -54,6 +54,10 @@ bun run --cwd apps/extension build
 bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
 ```
 
+插件管理 UI：
+- 打开 `http://127.0.0.1:7878/plugins/ui`
+- 支持：从 git 安装插件、启用/禁用插件、卸载插件、一键生成并构建扩展
+
 ### 4. 查看扩展侧页面
 ```bash
 bun apps/cli/src/index.ts pages-remote --endpoint http://127.0.0.1:7878
@@ -82,6 +86,69 @@ bun apps/cli/src/index.ts apply --endpoint http://127.0.0.1:7878 --page tab:1234
 ### 7. 调用动作 / 函数
 ```bash
 bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:123456 --id page --fn search --args '{"query":"playwrong llm automation"}'
+```
+
+---
+
+## 插件系统（写法 + 使用）
+
+### 1. 插件包规约
+
+每个插件仓库根目录必须包含 `playwrong.plugin.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "pluginId": "example.wikipedia.search",
+  "name": "Wikipedia Search Helper",
+  "version": "0.1.0",
+  "entry": "src/index.ts",
+  "match": {
+    "hosts": ["*.wikipedia.org"],
+    "paths": ["/wiki/*", "/w/index.php"]
+  }
+}
+```
+
+关键字段：
+- `pluginId`：唯一标识
+- `entry`：插件入口 TS 文件（相对路径）
+- `match`：插件生效网站范围（至少 `hosts` 或 `paths` 之一）
+
+完整规范见：`plugins/PLUGIN_SPEC.md`
+
+### 2. 插件入口导出约定
+
+`entry` 文件导出以下之一：
+- `export const pluginScripts: PluginScript[] = [...]`
+- `export default PluginScript[]`
+
+插件无法处理当前页面/动作时，请抛出 `new Error("PLUGIN_MISS")`。
+
+### 3. 写插件示例
+
+仓库内提供了两个示例：
+- `plugins/examples/wikipedia-search`
+- `plugins/examples/hackernews-reader`
+
+### 4. 安装与启用插件（UI）
+
+1. 启动服务：`bun apps/cli/src/index.ts serve`
+2. 打开 `http://127.0.0.1:7878/plugins/ui`
+3. 在 “Install From Git” 填入 git 地址并安装
+4. 在列表中切换启用/禁用
+5. 点击 “Generate + Build Extension”
+6. 在 Chrome 扩展页重新加载 `apps/extension/dist`
+
+说明：
+- 启用状态存储在 `plugins/registry.json`
+- 克隆插件目录在 `plugins/installed/*`
+- 生成文件在 `apps/extension/src/user-scripts/managed-plugins.generated.ts`
+
+### 5. 命令行生成托管插件注册文件
+
+```bash
+bun run plugins:generate
 ```
 
 ---
@@ -150,6 +217,12 @@ bun run test:e2e:codex-google
 bun run test:e2e:codex-google:real
 ```
 
+### 插件管理相关测试
+```bash
+bun test tests/unit/plugin-manager.spec.ts
+bun test tests/e2e/plugin-manager-http.spec.ts
+```
+
 ---
 
 ## 目录结构
@@ -159,6 +232,10 @@ apps/
   cli/          # bridge CLI（含 serve/pages/sync/pull/apply/call）
   server/       # HTTP + WebSocket gateway + snapshot core
   extension/    # Chrome MV3 扩展（background/content + site scripts）
+plugins/
+  PLUGIN_SPEC.md
+  examples/     # 插件编写示例
+  installed/    # git 安装后的插件（运行时目录）
 packages/
   protocol/     # 协议类型、错误码、XML 渲染
   plugin-sdk/   # 匹配器、Locator、插件接口
@@ -177,11 +254,18 @@ tests/
 - `GET /extension/status`
 - `GET /pages`
 - `GET /pages/remote`
+- `GET /plugins`
+- `GET /plugins/ui`
 - `POST /sync/page`
 - `POST /sync/all`
 - `POST /pull`
 - `POST /apply`
 - `POST /call`
+- `POST /plugins/install`
+- `POST /plugins/set-enabled`
+- `POST /plugins/uninstall`
+- `POST /plugins/generate`
+- `POST /plugins/apply`
 
 ---
 

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "example.wikipedia.search",
+  "name": "Wikipedia Search Helper",
+  "version": "0.1.0",
+  "description": "Expose Wikipedia search input and article links as semantic nodes.",
+  "entry": "src/index.ts",
+  "match": {
+    "hosts": ["*.wikipedia.org"],
+    "paths": ["/wiki/*", "/w/index.php"]
+  }
+}

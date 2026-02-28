@@ -8,3 +8,5 @@ tmp/
 *.tsbuildinfo
 .DS_Store
 apps/extension/dist/
+plugins/installed/*
+!plugins/installed/.gitkeep

@@ -1,4 +1,5 @@
 import type { PluginScript } from "@playwrong/plugin-sdk";
+import { managedPluginScripts } from "./managed-plugins.generated";
 
 export interface UserSimpleStabilityRule {
   ruleId: string;
@@ -27,7 +28,7 @@ export const userSimpleStabilityRules: UserSimpleStabilityRule[] = [
 ];
 
 // User-defined TS plugin scripts with optional `isStable` judge.
-export const userPluginScripts: PluginScript[] = [
+export const localUserPluginScripts: PluginScript[] = [
   // Example:
   // {
   //   scriptId: "user.google.stable-judge",
@@ -50,3 +51,5 @@ export const userPluginScripts: PluginScript[] = [
   //   }
   // }
 ];
+
+export const userPluginScripts: PluginScript[] = [...managedPluginScripts, ...localUserPluginScripts];

@@ -16,12 +16,14 @@
 - `packages/protocol`: 协议类型、错误码、XML 投影工具。
 - `packages/plugin-sdk`: 插件脚本接口、页面匹配器、Locator 解析器。
 - `apps/server`: 会话核心、快照管理、HTTP API、扩展 WebSocket RPC 网关。
+  - 插件管理：`/plugins` API + `/plugins/ui` 前端管理页（git 安装、启停、生成/构建）。
 - `apps/cli`: 面向人类/LLM 的命令行入口，负责同步、文件投影与动作调用。
 - `apps/extension`: Chrome 插件运行时（`background + content script`），负责提取与执行。
   - 内置站点脚本：`google.search / bing.search / duckduckgo.search`，未命中时回退通用抽取器。
   - 用户可配置脚本：`apps/extension/src/user-scripts/index.ts`
     - 简单规则：`userSimpleStabilityRules`（可配置 `kConsecutive` 等稳定阈值）
     - TS 插件：`userPluginScripts`（可写 `isStable(ctx)` 自定义稳定判定）
+    - 托管插件：`managed-plugins.generated.ts`（由 `plugins/registry.json` 生成）
 
 ## 4. 职责边界（关键）
 - 插件输入：URL/标题/信号上下文。
@@ -69,6 +71,7 @@
 
 ## 12. 运行命令
 - 启动服务：`bridge serve`
+- 插件管理 UI：打开 `http://127.0.0.1:7878/plugins/ui`
 - 查看扩展远端页面：`bridge pages-remote`
 - 同步单页：`bridge sync --page tab:123`
 - 同步全部：`bridge sync-all`
@@ -114,3 +117,10 @@
   - `FASTPATH_PAGE_TYPE=google.search`
   - `FASTPATH_RESULT_IDS=search.result.N.open...`
   - `FASTPATH_NEXT_ACTION=search.pagination.next`
+
+## 15. 插件包规范
+- 插件仓库必须含 `playwrong.plugin.json`
+- `match.hosts/paths` 声明插件网站作用域
+- `entry` 导出 `pluginScripts` 或 `default`（`PluginScript[]`）
+- 服务端支持 `git clone` 安装到 `plugins/installed/*`
+- 用户可在 UI 或 API 中配置插件启用/禁用

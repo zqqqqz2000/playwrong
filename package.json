@@ -9,6 +9,7 @@
     "@playwrong/server": "workspace:*"
   },
   "scripts": {
+    "plugins:generate": "bun scripts/generate-managed-plugins.ts",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test",
     "test:unit": "bun test tests/unit",

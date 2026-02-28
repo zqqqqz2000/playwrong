@@ -1,4 +1,5 @@
 import {
+  BridgeError,
   ERROR_HTTP_STATUS,
   toBridgeError,
   type ApplyRequest,
@@ -8,6 +9,8 @@ import {
 } from "@playwrong/protocol";
 import { BridgeCore, type ExecutionBridge } from "./core";
 import { ExtensionGateway } from "./extension-gateway";
+import { PluginManager } from "./plugin-manager";
+import { renderPluginManagerHtml } from "./plugin-manager-ui";
 
 export interface StartBridgeHttpServerOptions {
   host?: string;
@@ -15,10 +18,26 @@ export interface StartBridgeHttpServerOptions {
   core?: BridgeCore;
   executor?: ExecutionBridge;
   extensionGateway?: ExtensionGateway;
+  pluginManager?: PluginManager;
 }
 
 interface SyncPageRequest {
   pageId: string;
+}
+
+interface InstallPluginRequest {
+  repoUrl: string;
+  ref?: string;
+  enabled?: boolean;
+}
+
+interface SetPluginEnabledRequest {
+  pluginId: string;
+  enabled: boolean;
+}
+
+interface UninstallPluginRequest {
+  pluginId: string;
 }
 
 async function readJson<T>(request: Request): Promise<T> {
@@ -29,6 +48,13 @@ function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "content-type": "application/json" }
+  });
+}
+
+function html(status: number, payload: string): Response {
+  return new Response(payload, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8" }
   });
 }
 
@@ -52,6 +78,7 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
 } {
   const core = options.core ?? new BridgeCore();
   const extensionGateway = options.extensionGateway ?? new ExtensionGateway();
+  const pluginManager = options.pluginManager ?? new PluginManager();
   const executor = options.executor ?? extensionGateway;
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 7878;
@@ -88,6 +115,58 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
         if (request.method === "GET" && url.pathname === "/pages/remote") {
           const pages = await extensionGateway.listPages();
           return json(200, { pages });
+        }
+
+        if (request.method === "GET" && url.pathname === "/plugins/ui") {
+          return html(200, renderPluginManagerHtml());
+        }
+
+        if (request.method === "GET" && url.pathname === "/plugins") {
+          const plugins = await pluginManager.listPlugins();
+          return json(200, { plugins });
+        }
+
+        if (request.method === "POST" && url.pathname === "/plugins/install") {
+          const payload = await readJson<InstallPluginRequest>(request);
+          if (!payload.repoUrl) {
+            throw new BridgeError("INVALID_REQUEST", "repoUrl is required", {
+              field: "repoUrl"
+            });
+          }
+          const plugin = await pluginManager.installFromGit(payload);
+          return json(200, { plugin });
+        }
+
+        if (request.method === "POST" && url.pathname === "/plugins/set-enabled") {
+          const payload = await readJson<SetPluginEnabledRequest>(request);
+          if (!payload.pluginId || typeof payload.enabled !== "boolean") {
+            throw new BridgeError("INVALID_REQUEST", "pluginId and enabled are required", {
+              fields: ["pluginId", "enabled"]
+            });
+          }
+          const plugin = await pluginManager.setPluginEnabled(payload.pluginId, payload.enabled);
+          return json(200, { plugin });
+        }
+
+        if (request.method === "POST" && url.pathname === "/plugins/uninstall") {
+          const payload = await readJson<UninstallPluginRequest>(request);
+          if (!payload.pluginId) {
+            throw new BridgeError("INVALID_REQUEST", "pluginId is required", {
+              field: "pluginId"
+            });
+          }
+          await pluginManager.uninstallPlugin(payload.pluginId);
+          return json(200, { ok: true, pluginId: payload.pluginId });
+        }
+
+        if (request.method === "POST" && url.pathname === "/plugins/generate") {
+          const generated = await pluginManager.generateManagedPluginsFile();
+          return json(200, { generated });
+        }
+
+        if (request.method === "POST" && url.pathname === "/plugins/apply") {
+          const output = await pluginManager.applyPluginsToExtensionBuild();
+          return json(200, output);
         }
 
         if (request.method === "POST" && url.pathname === "/snapshot/upsert") {
