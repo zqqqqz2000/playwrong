@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwrong Google Fastpath"
+  short_description: "Fast bridge flow for Google search via extension and CLI"
+  default_prompt: "Use the Playwrong bridge fastpath to run Google search and verify results with minimal exploration."

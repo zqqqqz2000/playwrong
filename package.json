@@ -14,7 +14,9 @@
     "test:unit": "bun test tests/unit",
     "test:e2e": "bun test tests/e2e",
     "test:e2e:browser-google": "bun tests/e2e/browser-google-flow.ts",
-    "test:e2e:browser-google:real": "PLAYWRONG_E2E_TARGET=real-google bun tests/e2e/browser-google-flow.ts"
+    "test:e2e:browser-google:real": "PLAYWRONG_E2E_TARGET=real-google bun tests/e2e/browser-google-flow.ts",
+    "test:e2e:codex-google": "bun tests/e2e/codex-google-cli-flow.ts",
+    "test:e2e:codex-google:real": "PLAYWRONG_E2E_TARGET=real-google bun tests/e2e/codex-google-cli-flow.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",

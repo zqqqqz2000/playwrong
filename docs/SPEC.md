@@ -103,3 +103,14 @@
 - E2E 测试：pull/apply/call 全链路、多页面、冲突。
 - 网页匹配逻辑：参数化海量用例（host/path/query/signals/title）。
 - 真实浏览器联调：`bun run test:e2e:browser-google`（扩展 + server + CLI 协议 + 页面状态变化观测）。
+- Codex CLI 联调：`bun run test:e2e:codex-google`（真实调用 codex + skill 快路径脚本，校验 `google.search` 抽象与结果节点证据）。
+
+## 14. Codex Skill 快路径
+- Skill 目录：`skills/playwrong-google-search-fastpath`
+- 目标：让 Codex 在 E2E 中直接执行固定命令，不做大范围探索。
+- 主命令：
+  - `bun skills/playwrong-google-search-fastpath/scripts/google_search_fastpath.ts --endpoint http://127.0.0.1:7878 --pageId <PAGE_ID> --query \"playwrong llm automation\"`
+- 关键日志（用于判定是否走抽象）：
+  - `FASTPATH_PAGE_TYPE=google.search`
+  - `FASTPATH_RESULT_IDS=search.result.N.open...`
+  - `FASTPATH_NEXT_ACTION=search.pagination.next`
