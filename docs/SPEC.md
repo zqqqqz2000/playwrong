@@ -19,6 +19,9 @@
 - `apps/cli`: 面向人类/LLM 的命令行入口，负责同步、文件投影与动作调用。
 - `apps/extension`: Chrome 插件运行时（`background + content script`），负责提取与执行。
   - 内置站点脚本：`google.search / bing.search / duckduckgo.search`，未命中时回退通用抽取器。
+  - 用户可配置脚本：`apps/extension/src/user-scripts/index.ts`
+    - 简单规则：`userSimpleStabilityRules`（可配置 `kConsecutive` 等稳定阈值）
+    - TS 插件：`userPluginScripts`（可写 `isStable(ctx)` 自定义稳定判定）
 
 ## 4. 职责边界（关键）
 - 插件输入：URL/标题/信号上下文。

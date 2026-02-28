@@ -1,12 +1,21 @@
 import { pickScript } from "@playwrong/plugin-sdk";
-import type { MatchContext, NodeTarget, PluginScript } from "@playwrong/plugin-sdk";
+import type { MatchContext, MatchResult, NodeTarget, PluginScript } from "@playwrong/plugin-sdk";
 import type { PluginExtractResult, ScalarValue, SemanticNode } from "@playwrong/protocol";
+
+export interface SelectedPluginScript {
+  script: PluginScript;
+  result: MatchResult;
+}
 
 export class ExtensionPluginHost {
   constructor(private readonly scripts: PluginScript[]) {}
 
+  async select(ctx: MatchContext): Promise<SelectedPluginScript | null> {
+    return await pickScript(this.scripts, ctx);
+  }
+
   async extract(ctx: MatchContext): Promise<PluginExtractResult | null> {
-    const selected = await pickScript(this.scripts, ctx);
+    const selected = await this.select(ctx);
     if (!selected) {
       return null;
     }
@@ -19,7 +28,7 @@ export class ExtensionPluginHost {
     target: NodeTarget,
     value: ScalarValue
   ): Promise<void> {
-    const selected = await pickScript(this.scripts, ctx);
+    const selected = await this.select(ctx);
     if (!selected) {
       throw new Error("PLUGIN_MISS");
     }
@@ -33,7 +42,7 @@ export class ExtensionPluginHost {
     fn: string,
     args?: Record<string, unknown>
   ): Promise<unknown> {
-    const selected = await pickScript(this.scripts, ctx);
+    const selected = await this.select(ctx);
     if (!selected) {
       throw new Error("PLUGIN_MISS");
     }

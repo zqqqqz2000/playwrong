@@ -1,4 +1,9 @@
-import type { MatchContext } from "@playwrong/plugin-sdk";
+import { matchHostPattern, matchPathPattern } from "@playwrong/plugin-sdk";
+import type {
+  MatchContext,
+  StabilityPolicy,
+  StabilitySnapshot
+} from "@playwrong/plugin-sdk";
 import type {
   FunctionCallDef,
   LocatorSpec,
@@ -8,8 +13,9 @@ import type {
   SemanticNode
 } from "@playwrong/protocol";
 import type { ContentBridgeError, ContentBridgeRequest, ContentBridgeResponse } from "./messages";
-import { ExtensionPluginHost } from "./plugin-host";
+import { ExtensionPluginHost, type SelectedPluginScript } from "./plugin-host";
 import { createBuiltinSiteScripts } from "./site-scripts";
+import { userPluginScripts, userSimpleStabilityRules, type UserSimpleStabilityRule } from "./user-scripts";
 
 interface LocalExtractResult {
   pageType: string;
@@ -25,8 +31,22 @@ const SEARCH_QUERY_SELECTOR = "input[name='q'],textarea[name='q']";
 const SEARCH_SUBMIT_SELECTOR = "button[type='submit'],input[type='submit'],input[name='btnK']";
 const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
 
-const pluginHost = new ExtensionPluginHost(createBuiltinSiteScripts());
+const pluginHost = new ExtensionPluginHost([...createBuiltinSiteScripts(), ...userPluginScripts]);
 let latestTree: SemanticNode[] = [];
+
+const DEFAULT_STABILITY_POLICY: Required<StabilityPolicy> = {
+  kConsecutive: 8,
+  sampleIntervalMs: 100,
+  timeoutMs: 8000,
+  maxPendingRequests: 0,
+  maxRecentMutations: 5
+};
+
+const STABLE_MUTATION_WINDOW_MS = 500;
+const MAX_STABILITY_HISTORY = 60;
+
+let pendingRequests = 0;
+const mutationTimestamps: number[] = [];
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -171,6 +191,260 @@ function isPluginMiss(error: unknown): boolean {
   }
 
   return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clampNonNegative(input: number): number {
+  if (!Number.isFinite(input)) {
+    return 0;
+  }
+  return Math.max(0, input);
+}
+
+function trackMutationBurst(): void {
+  mutationTimestamps.push(Date.now());
+}
+
+function recentMutationCount(windowMs: number): number {
+  const now = Date.now();
+  while (mutationTimestamps.length > 0 && mutationTimestamps[0] !== undefined && mutationTimestamps[0] < now - windowMs) {
+    mutationTimestamps.shift();
+  }
+  return mutationTimestamps.length;
+}
+
+function installNetworkTracker(): void {
+  const win = window as Window & {
+    __playwrongFetchPatched?: boolean;
+  };
+
+  if (!win.__playwrongFetchPatched) {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (async (...args: Parameters<typeof fetch>): Promise<Response> => {
+      pendingRequests += 1;
+      try {
+        return await nativeFetch(...args);
+      } finally {
+        pendingRequests = clampNonNegative(pendingRequests - 1);
+      }
+    }) as typeof fetch;
+    win.__playwrongFetchPatched = true;
+  }
+
+  const xhrProto = XMLHttpRequest.prototype as XMLHttpRequest & {
+    __playwrongPatched?: boolean;
+  };
+  if (xhrProto.__playwrongPatched) {
+    return;
+  }
+
+  const nativeSend = xhrProto.send;
+  xhrProto.send = function patchedSend(...args: unknown[]): void {
+    pendingRequests += 1;
+    const onDone = () => {
+      pendingRequests = clampNonNegative(pendingRequests - 1);
+      this.removeEventListener("loadend", onDone);
+    };
+    this.addEventListener("loadend", onDone);
+    (nativeSend as (...inner: unknown[]) => void).apply(this, args);
+  };
+  xhrProto.__playwrongPatched = true;
+}
+
+function installMutationTracker(): void {
+  const win = window as Window & {
+    __playwrongMutationObserverInstalled?: boolean;
+  };
+  if (win.__playwrongMutationObserverInstalled) {
+    return;
+  }
+
+  const root = document.documentElement ?? document.body;
+  if (!root) {
+    return;
+  }
+
+  const observer = new MutationObserver(() => {
+    trackMutationBurst();
+  });
+  observer.observe(root, {
+    childList: true,
+    attributes: true,
+    characterData: true,
+    subtree: true
+  });
+  win.__playwrongMutationObserverInstalled = true;
+}
+
+function createStabilitySnapshot(): StabilitySnapshot {
+  return {
+    timestamp: Date.now(),
+    url: window.location.href,
+    title: document.title,
+    readyState: document.readyState,
+    pendingRequests: pendingRequests,
+    recentMutations: recentMutationCount(STABLE_MUTATION_WINDOW_MS)
+  };
+}
+
+function mergedStabilityPolicy(
+  selected: SelectedPluginScript | null,
+  simpleRule: UserSimpleStabilityRule | null
+): Required<StabilityPolicy> {
+  const merged: Required<StabilityPolicy> = { ...DEFAULT_STABILITY_POLICY };
+
+  const pluginPolicy = selected?.script.stability;
+  if (pluginPolicy) {
+    if (pluginPolicy.kConsecutive !== undefined) {
+      merged.kConsecutive = Math.max(1, Math.trunc(pluginPolicy.kConsecutive));
+    }
+    if (pluginPolicy.sampleIntervalMs !== undefined) {
+      merged.sampleIntervalMs = Math.max(20, Math.trunc(pluginPolicy.sampleIntervalMs));
+    }
+    if (pluginPolicy.timeoutMs !== undefined) {
+      merged.timeoutMs = Math.max(200, Math.trunc(pluginPolicy.timeoutMs));
+    }
+    if (pluginPolicy.maxPendingRequests !== undefined) {
+      merged.maxPendingRequests = Math.max(0, Math.trunc(pluginPolicy.maxPendingRequests));
+    }
+    if (pluginPolicy.maxRecentMutations !== undefined) {
+      merged.maxRecentMutations = Math.max(0, Math.trunc(pluginPolicy.maxRecentMutations));
+    }
+  }
+
+  if (simpleRule) {
+    if (simpleRule.kConsecutive !== undefined) {
+      merged.kConsecutive = Math.max(1, Math.trunc(simpleRule.kConsecutive));
+    }
+    if (simpleRule.sampleIntervalMs !== undefined) {
+      merged.sampleIntervalMs = Math.max(20, Math.trunc(simpleRule.sampleIntervalMs));
+    }
+    if (simpleRule.timeoutMs !== undefined) {
+      merged.timeoutMs = Math.max(200, Math.trunc(simpleRule.timeoutMs));
+    }
+    if (simpleRule.maxPendingRequests !== undefined) {
+      merged.maxPendingRequests = Math.max(0, Math.trunc(simpleRule.maxPendingRequests));
+    }
+    if (simpleRule.maxRecentMutations !== undefined) {
+      merged.maxRecentMutations = Math.max(0, Math.trunc(simpleRule.maxRecentMutations));
+    }
+  }
+
+  return merged;
+}
+
+function matchSimpleRule(rule: UserSimpleStabilityRule, ctx: MatchContext): number | null {
+  let score = 0;
+
+  if (rule.hosts && rule.hosts.length > 0) {
+    const hostHit = rule.hosts.some((pattern) => matchHostPattern(pattern, ctx.url.hostname));
+    if (!hostHit) {
+      return null;
+    }
+    score += 2;
+  }
+
+  if (rule.paths && rule.paths.length > 0) {
+    const pathHit = rule.paths.some((pattern) => matchPathPattern(pattern, ctx.url.pathname));
+    if (!pathHit) {
+      return null;
+    }
+    score += 2;
+  }
+
+  score += (rule.hosts?.length ?? 0) * 0.01;
+  score += (rule.paths?.length ?? 0) * 0.01;
+  return score;
+}
+
+function pickSimpleStabilityRule(ctx: MatchContext): UserSimpleStabilityRule | null {
+  let best: { rule: UserSimpleStabilityRule; score: number } | null = null;
+  for (const rule of userSimpleStabilityRules) {
+    const score = matchSimpleRule(rule, ctx);
+    if (score === null) {
+      continue;
+    }
+    if (!best || score > best.score) {
+      best = { rule, score };
+    }
+  }
+  return best?.rule ?? null;
+}
+
+async function waitForStable(ctx: MatchContext, selected: SelectedPluginScript | null): Promise<void> {
+  const simpleRule = pickSimpleStabilityRule(ctx);
+  const policy = mergedStabilityPolicy(selected, simpleRule);
+  const history: StabilitySnapshot[] = [];
+
+  const startedAt = Date.now();
+  let stableUrl = window.location.href;
+  let consecutive = 0;
+
+  while (Date.now() - startedAt <= policy.timeoutMs) {
+    const snapshot = createStabilitySnapshot();
+    history.push(snapshot);
+    if (history.length > MAX_STABILITY_HISTORY) {
+      history.shift();
+    }
+
+    if (snapshot.url !== stableUrl) {
+      stableUrl = snapshot.url;
+      consecutive = 0;
+      await sleep(policy.sampleIntervalMs);
+      continue;
+    }
+
+    let passed =
+      snapshot.readyState !== "loading" &&
+      snapshot.pendingRequests <= policy.maxPendingRequests &&
+      snapshot.recentMutations <= policy.maxRecentMutations;
+
+    if (passed && selected?.script.isStable) {
+      const judged = await selected.script.isStable({
+        match: createMatchContext(),
+        latest: snapshot,
+        history
+      });
+      passed = Boolean(judged);
+    }
+
+    if (passed) {
+      consecutive += 1;
+      if (consecutive >= policy.kConsecutive) {
+        return;
+      }
+    } else {
+      consecutive = 0;
+    }
+
+    await sleep(policy.sampleIntervalMs);
+  }
+
+  throw createResolveError("ACTION_FAIL", "waitForStable timeout", {
+    policy,
+    latest: history[history.length - 1]
+  });
+}
+
+installNetworkTracker();
+installMutationTracker();
+
+function shouldWaitForStableAfterCall(input: {
+  target: { id: string };
+  fn: string;
+}): boolean {
+  if (input.target.id === "page") {
+    if (input.fn === "search" || input.fn === "goto" || input.fn === "refresh" || input.fn === "nextPage") {
+      return false;
+    }
+  }
+  if (input.fn === "click" || input.fn === "submit") {
+    return false;
+  }
+  return true;
 }
 
 function getAssociatedLabel(element: Element): string {
@@ -494,13 +768,16 @@ function extractGenericTree(): LocalExtractResult {
 
 async function extractTree(): Promise<LocalExtractResult> {
   const matchContext = createMatchContext();
+  const selected = await pluginHost.select(matchContext);
   let pluginResult: PluginExtractResult | null = null;
 
-  try {
-    pluginResult = await pluginHost.extract(matchContext);
-  } catch (error) {
-    if (!isPluginMiss(error)) {
-      throw error;
+  if (selected) {
+    try {
+      pluginResult = await selected.script.extract(matchContext);
+    } catch (error) {
+      if (!isPluginMiss(error)) {
+        throw error;
+      }
     }
   }
 
@@ -808,13 +1085,17 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
     }
 
     if (message.type === "bridge.setValue") {
+      const matchContext = createMatchContext();
+      const selected = await pluginHost.select(matchContext);
       let handledByPlugin = false;
-      try {
-        await pluginHost.setValue(createMatchContext(), latestTree, message.target, message.value);
-        handledByPlugin = true;
-      } catch (error) {
-        if (!isPluginMiss(error)) {
-          throw error;
+      if (selected) {
+        try {
+          await selected.script.setValue({ ...matchContext, tree: latestTree, target: message.target }, message.value);
+          handledByPlugin = true;
+        } catch (error) {
+          if (!isPluginMiss(error)) {
+            throw error;
+          }
         }
       }
 
@@ -822,6 +1103,8 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
         const element = resolveElement(message.target, message.locator);
         setElementValue(element, message.value);
       }
+
+      await waitForStable(matchContext, selected);
       const response: ContentBridgeResponse<{ ok: true }> = {
         ok: true,
         result: { ok: true }
@@ -831,15 +1114,23 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
     }
 
     if (message.type === "bridge.call") {
+      const matchContext = createMatchContext();
+      const selected = await pluginHost.select(matchContext);
       let output: unknown;
       let handledByPlugin = false;
 
-      try {
-        output = await pluginHost.call(createMatchContext(), latestTree, message.target, message.fn, message.args);
-        handledByPlugin = true;
-      } catch (error) {
-        if (!isPluginMiss(error)) {
-          throw error;
+      if (selected) {
+        try {
+          output = await selected.script.invoke(
+            { ...matchContext, tree: latestTree, target: message.target },
+            message.fn,
+            message.args
+          );
+          handledByPlugin = true;
+        } catch (error) {
+          if (!isPluginMiss(error)) {
+            throw error;
+          }
         }
       }
 
@@ -850,6 +1141,10 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
           const element = resolveElement(message.target, message.locator);
           output = executeElementCall(element, message.fn, message.args);
         }
+      }
+
+      if (shouldWaitForStableAfterCall({ target: message.target, fn: message.fn })) {
+        await waitForStable(matchContext, selected);
       }
       const response: ContentBridgeResponse<{ output?: unknown }> = {
         ok: true,

@@ -13,6 +13,29 @@ export interface MatchResult {
   reason?: string;
 }
 
+export interface StabilityPolicy {
+  kConsecutive?: number;
+  sampleIntervalMs?: number;
+  timeoutMs?: number;
+  maxPendingRequests?: number;
+  maxRecentMutations?: number;
+}
+
+export interface StabilitySnapshot {
+  timestamp: number;
+  url: string;
+  title: string;
+  readyState: DocumentReadyState;
+  pendingRequests: number;
+  recentMutations: number;
+}
+
+export interface StabilityJudgeContext {
+  match: MatchContext;
+  latest: StabilitySnapshot;
+  history: StabilitySnapshot[];
+}
+
 export interface ScriptMatchRule {
   hosts?: string[];
   paths?: Array<string | RegExp>;
@@ -41,6 +64,8 @@ export interface PluginScript {
   priority?: number;
   rules?: ScriptMatchRule[];
   match?: (ctx: MatchContext) => MatchResult | Promise<MatchResult>;
+  stability?: StabilityPolicy;
+  isStable?: (ctx: StabilityJudgeContext) => boolean | Promise<boolean>;
   extract(ctx: ExtractContext): Promise<PluginExtractResult>;
   setValue(ctx: ActionContext, value: ScalarValue): Promise<void>;
   invoke(ctx: ActionContext, fn: string, args?: Record<string, unknown>): Promise<unknown>;
