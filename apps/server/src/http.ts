@@ -10,7 +10,6 @@ import {
 import { BridgeCore, type ExecutionBridge } from "./core";
 import { ExtensionGateway } from "./extension-gateway";
 import { PluginManager } from "./plugin-manager";
-import { renderPluginManagerHtml } from "./plugin-manager-ui";
 
 export interface StartBridgeHttpServerOptions {
   host?: string;
@@ -48,13 +47,6 @@ function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "content-type": "application/json" }
-  });
-}
-
-function html(status: number, payload: string): Response {
-  return new Response(payload, {
-    status,
-    headers: { "content-type": "text/html; charset=utf-8" }
   });
 }
 
@@ -115,10 +107,6 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
         if (request.method === "GET" && url.pathname === "/pages/remote") {
           const pages = await extensionGateway.listPages();
           return json(200, { pages });
-        }
-
-        if (request.method === "GET" && url.pathname === "/plugins/ui") {
-          return html(200, renderPluginManagerHtml());
         }
 
         if (request.method === "GET" && url.pathname === "/plugins") {

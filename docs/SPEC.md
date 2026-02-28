@@ -16,7 +16,7 @@
 - `packages/protocol`: 协议类型、错误码、XML 投影工具。
 - `packages/plugin-sdk`: 插件脚本接口、页面匹配器、Locator 解析器。
 - `apps/server`: 会话核心、快照管理、HTTP API、扩展 WebSocket RPC 网关。
-  - 插件管理：`/plugins` API + `/plugins/ui` 前端管理页（git 安装、启停、生成/构建）。
+  - 插件管理 API：`/plugins` 系列路由（git 安装、启停、生成/构建）。
 - `apps/cli`: 面向人类/LLM 的命令行入口，负责同步、文件投影与动作调用。
 - `apps/extension`: Chrome 插件运行时（`background + content script`），负责提取与执行。
   - 内置站点脚本：`google.search / bing.search / duckduckgo.search`，未命中时回退通用抽取器。
@@ -71,7 +71,7 @@
 
 ## 12. 运行命令
 - 启动服务：`bridge serve`
-- 插件管理 UI：打开 `http://127.0.0.1:7878/plugins/ui`
+- 插件管理 UI：在 Chrome 扩展 popup 内使用
 - 查看扩展远端页面：`bridge pages-remote`
 - 同步单页：`bridge sync --page tab:123`
 - 同步全部：`bridge sync-all`

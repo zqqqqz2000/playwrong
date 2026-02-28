@@ -54,9 +54,9 @@ bun run --cwd apps/extension build
 bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
 ```
 
-插件管理 UI：
-- 打开 `http://127.0.0.1:7878/plugins/ui`
-- 支持：从 git 安装插件、启用/禁用插件、卸载插件、一键生成并构建扩展
+插件管理 UI（在 Chrome 扩展内）：
+- 点击浏览器工具栏中的 `Playwrong Bridge` 扩展图标打开 popup
+- 在 popup 内可配置 server endpoint、从 git 安装插件、启用/禁用、卸载、生成与构建
 
 ### 4. 查看扩展侧页面
 ```bash
@@ -134,7 +134,7 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 ### 4. 安装与启用插件（UI）
 
 1. 启动服务：`bun apps/cli/src/index.ts serve`
-2. 打开 `http://127.0.0.1:7878/plugins/ui`
+2. 点击 Chrome 工具栏扩展图标，打开 `Playwrong Bridge` popup
 3. 在 “Install From Git” 填入 git 地址并安装
 4. 在列表中切换启用/禁用
 5. 点击 “Generate + Build Extension”
@@ -255,7 +255,6 @@ tests/
 - `GET /pages`
 - `GET /pages/remote`
 - `GET /plugins`
-- `GET /plugins/ui`
 - `POST /sync/page`
 - `POST /sync/all`
 - `POST /pull`

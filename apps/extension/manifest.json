@@ -17,6 +17,7 @@
     }
   ],
   "action": {
-    "default_title": "Playwrong Bridge"
+    "default_title": "Playwrong Bridge",
+    "default_popup": "popup.html"
   }
 }

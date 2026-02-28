@@ -96,7 +96,7 @@ async function requestJson<T>(baseUrl: string, path: string, method: "GET" | "PO
 }
 
 describe("Plugin manager HTTP routes", () => {
-  it("supports install/list/toggle/uninstall and plugin ui", async () => {
+  it("supports install/list/toggle/uninstall", async () => {
     const workspace = await createWorkspace();
     const repo = await createGitPluginRepo(workspace);
 
@@ -147,11 +147,6 @@ describe("Plugin manager HTTP routes", () => {
       {}
     );
     expect(generateResult.generated.enabledCount).toBe(0);
-
-    const uiResponse = await fetch(new URL("/plugins/ui", baseUrl));
-    const uiHtml = await uiResponse.text();
-    expect(uiResponse.status).toBe(200);
-    expect(uiHtml).toContain("Playwrong Plugin Manager");
 
     const uninstallResult = await requestJson<{ ok: boolean }>(baseUrl, "/plugins/uninstall", "POST", {
       pluginId: "example.http.plugin"
