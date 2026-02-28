@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true
+  },
+  "references": [
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/plugin-sdk" }
+  ],
+  "include": ["src/**/*.ts"]
+}

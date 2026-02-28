@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Playwrong Bridge",
+  "description": "Bridge extension that maps pages into semantic tree for LLM workflows.",
+  "version": "0.1.0",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Playwrong Bridge"
+  }
+}

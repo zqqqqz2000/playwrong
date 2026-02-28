@@ -1,0 +1,15 @@
+{
+  "name": "@playwrong/extension",
+  "version": "0.1.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/background.ts src/content.ts --outdir dist --target browser --format esm && cp manifest.json dist/manifest.json"
+  },
+  "dependencies": {
+    "@playwrong/plugin-sdk": "workspace:*",
+    "@playwrong/protocol": "workspace:*"
+  }
+}

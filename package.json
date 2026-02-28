@@ -1,0 +1,23 @@
+{
+  "name": "playwrong",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "dependencies": {
+    "@playwrong/protocol": "workspace:*",
+    "@playwrong/plugin-sdk": "workspace:*",
+    "@playwrong/server": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:e2e": "bun test tests/e2e"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "bun-types": "^1.2.22",
+    "playwright": "^1.58.2",
+    "typescript": "^5.6.3"
+  }
+}

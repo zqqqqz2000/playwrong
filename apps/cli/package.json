@@ -1,0 +1,14 @@
+{
+  "name": "@playwrong/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "bin": {
+    "bridge": "src/index.ts"
+  },
+  "dependencies": {
+    "@playwrong/protocol": "workspace:*",
+    "@playwrong/server": "workspace:*"
+  }
+}

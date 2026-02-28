@@ -1,0 +1,9 @@
+node_modules/
+.bun/
+.bridge/
+.bridge-e2e/
+tmp/
+*.log
+*.tsbuildinfo
+.DS_Store
+apps/extension/dist/

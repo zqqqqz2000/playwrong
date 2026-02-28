@@ -1,0 +1,89 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "playwrong",
+      "dependencies": {
+        "@playwrong/plugin-sdk": "workspace:*",
+        "@playwrong/protocol": "workspace:*",
+        "@playwrong/server": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/chrome": "^0.0.280",
+        "bun-types": "^1.2.22",
+        "playwright": "^1.58.2",
+        "typescript": "^5.6.3",
+      },
+    },
+    "apps/cli": {
+      "name": "@playwrong/cli",
+      "version": "0.1.0",
+      "bin": {
+        "bridge": "src/index.ts",
+      },
+      "dependencies": {
+        "@playwrong/protocol": "workspace:*",
+        "@playwrong/server": "workspace:*",
+      },
+    },
+    "apps/extension": {
+      "name": "@playwrong/extension",
+      "version": "0.1.0",
+      "dependencies": {
+        "@playwrong/plugin-sdk": "workspace:*",
+        "@playwrong/protocol": "workspace:*",
+      },
+    },
+    "apps/server": {
+      "name": "@playwrong/server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@playwrong/protocol": "workspace:*",
+      },
+    },
+    "packages/plugin-sdk": {
+      "name": "@playwrong/plugin-sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@playwrong/protocol": "workspace:*",
+      },
+    },
+    "packages/protocol": {
+      "name": "@playwrong/protocol",
+      "version": "0.1.0",
+    },
+  },
+  "packages": {
+    "@playwrong/cli": ["@playwrong/cli@workspace:apps/cli"],
+
+    "@playwrong/extension": ["@playwrong/extension@workspace:apps/extension"],
+
+    "@playwrong/plugin-sdk": ["@playwrong/plugin-sdk@workspace:packages/plugin-sdk"],
+
+    "@playwrong/protocol": ["@playwrong/protocol@workspace:packages/protocol"],
+
+    "@playwrong/server": ["@playwrong/server@workspace:apps/server"],
+
+    "@types/chrome": ["@types/chrome@0.0.280", "", { "dependencies": { "@types/filesystem": "*", "@types/har-format": "*" } }, "sha512-AotSmZrL9bcZDDmSI1D9dE7PGbhOur5L0cKxXd7IqbVizQWCY4gcvupPUVsQ4FfDj3V2tt/iOpomT9EY0s+w1g=="],
+
+    "@types/filesystem": ["@types/filesystem@0.0.36", "", { "dependencies": { "@types/filewriter": "*" } }, "sha512-vPDXOZuannb9FZdxgHnqSwAG/jvdGM8Wq+6N4D/d80z+D4HWH+bItqsZaVRQykAn6WEVeEkLm2oQigyHtgb0RA=="],
+
+    "@types/filewriter": ["@types/filewriter@0.0.33", "", {}, "sha512-xFU8ZXTw4gd358lb2jw25nxY9QAgqn2+bKKjKOYfNCzN4DKCFetK7sPtrlpg66Ywe3vWY9FNxprZawAh9wfJ3g=="],
+
+    "@types/har-format": ["@types/har-format@1.2.16", "", {}, "sha512-fluxdy7ryD3MV6h8pTfTYpy/xQzCFC7m89nOH9y94cNqJ1mDIDPut7MnRHI3F6qRmh/cT2fUjG1MLdCNb4hE9A=="],
+
+    "@types/node": ["@types/node@25.3.2", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-RpV6r/ij22zRRdyBPcxDeKAzH43phWVKEjL2iksqo1Vz3CuBUrgmPpPhALKiRfU7OMCmeeO9vECBMsV0hMTG8Q=="],
+
+    "bun-types": ["bun-types@1.3.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-tcpfCCl6XWo6nCVnpcVrxQ+9AYN1iqMIzgrSKYMB/fjLtV2eyAVEg7AxQJuCq/26R6HpKWykQXuSOq/21RYcbg=="],
+
+    "fsevents": ["fsevents@2.3.2", "", { "os": "darwin" }, "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA=="],
+
+    "playwright": ["playwright@1.58.2", "", { "dependencies": { "playwright-core": "1.58.2" }, "optionalDependencies": { "fsevents": "2.3.2" }, "bin": { "playwright": "cli.js" } }, "sha512-vA30H8Nvkq/cPBnNw4Q8TWz1EJyqgpuinBcHET0YVJVFldr8JDNiU9LaWAE1KqSkRYazuaBhTpB5ZzShOezQ6A=="],
+
+    "playwright-core": ["playwright-core@1.58.2", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-yZkEtftgwS8CsfYo7nm0KE8jsvm6i/PTgVtB8DL726wNf6H2IMsDuxCpJj59KDaxCtSnrWan2AeDqM7JBaultg=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
+  }
+}

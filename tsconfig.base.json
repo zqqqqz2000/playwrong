@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true,
+    "types": ["bun-types", "chrome"],
+    "baseUrl": ".",
+    "paths": {
+      "@playwrong/protocol": ["packages/protocol/src/index.ts"],
+      "@playwrong/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
+      "@playwrong/server": ["apps/server/src/index.ts"]
+    }
+  }
+}
