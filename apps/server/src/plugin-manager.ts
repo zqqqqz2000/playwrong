@@ -7,6 +7,10 @@ export interface PluginScopeRule {
   paths?: string[];
 }
 
+export interface PluginSkillSpec {
+  path: string;
+}
+
 export interface PluginPackManifest {
   schemaVersion: 1;
   pluginId: string;
@@ -15,6 +19,7 @@ export interface PluginPackManifest {
   description?: string;
   entry: string;
   match: PluginScopeRule;
+  skill: PluginSkillSpec;
 }
 
 export interface PluginSourceGit {
@@ -30,6 +35,7 @@ export interface InstalledPluginRecord {
   description?: string;
   entry: string;
   match: PluginScopeRule;
+  skillPath?: string;
   enabled: boolean;
   source: PluginSourceGit;
   installedAt: string;
@@ -94,6 +100,41 @@ function ensureFileImportPath(fromDir: string, absPath: string): string {
 
 function sanitizePluginDirName(pluginId: string): string {
   return pluginId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function isSafeRelativePath(path: string): boolean {
+  if (!path || typeof path !== "string") {
+    return false;
+  }
+  if (isAbsolute(path)) {
+    return false;
+  }
+  if (path.includes("..")) {
+    return false;
+  }
+  return true;
+}
+
+function validatePluginSkillContent(content: string, skillPath: string): void {
+  const trimmed = content.trim();
+  if (trimmed.length < 80) {
+    throw new BridgeError("INVALID_REQUEST", "Plugin skill document is too short", {
+      skillPath
+    });
+  }
+
+  const hasUsage = /^##\s*(usage|how to use|use|用法|使用)/im.test(trimmed);
+  const hasOps = /^##\s*(operations?|functions?|actions?|操作|函数|可用函数)/im.test(trimmed);
+  if (!hasUsage || !hasOps) {
+    throw new BridgeError(
+      "INVALID_REQUEST",
+      "Plugin skill must include sections for usage and operations/functions",
+      {
+        skillPath,
+        requires: ["## Usage", "## Operations"]
+      }
+    );
+  }
 }
 
 export class PluginManager {
@@ -322,6 +363,7 @@ export class PluginManager {
       version: manifest.version,
       entry: manifest.entry,
       match: manifest.match,
+      skillPath: manifest.skill.path,
       enabled: input.enabled,
       source: input.source,
       installedAt: existing?.installedAt ?? now,
@@ -352,9 +394,13 @@ export class PluginManager {
           registryPath: this.registryPath
         });
       }
+      const normalizedPlugins = parsed.plugins.map((plugin) => ({
+        ...plugin,
+        ...(plugin.skillPath ? { skillPath: plugin.skillPath } : {})
+      }));
       return {
         version: 1,
-        plugins: parsed.plugins
+        plugins: normalizedPlugins
       };
     } catch (error) {
       if (error instanceof BridgeError) {
@@ -408,9 +454,24 @@ export class PluginManager {
         manifestPath
       });
     }
-    if (isAbsolute(parsed.entry) || parsed.entry.includes("..")) {
+    if (!isSafeRelativePath(parsed.entry)) {
       throw new BridgeError("INVALID_REQUEST", "entry must be a safe relative path", {
         entry: parsed.entry
+      });
+    }
+    if (!parsed.skill || typeof parsed.skill !== "object") {
+      throw new BridgeError("INVALID_REQUEST", "skill is required in playwrong.plugin.json", {
+        manifestPath
+      });
+    }
+    if (!parsed.skill.path || typeof parsed.skill.path !== "string") {
+      throw new BridgeError("INVALID_REQUEST", "skill.path is required in playwrong.plugin.json", {
+        manifestPath
+      });
+    }
+    if (!isSafeRelativePath(parsed.skill.path)) {
+      throw new BridgeError("INVALID_REQUEST", "skill.path must be a safe relative path", {
+        skillPath: parsed.skill.path
       });
     }
     if (!parsed.match || typeof parsed.match !== "object") {
@@ -430,6 +491,10 @@ export class PluginManager {
 
     const entryPath = join(pluginRootDir, parsed.entry);
     await this.assertFileExists(entryPath, `Plugin entry not found: ${parsed.entry}`);
+    const skillPath = join(pluginRootDir, parsed.skill.path);
+    await this.assertFileExists(skillPath, `Plugin skill not found: ${parsed.skill.path}`);
+    const skillContent = await readFile(skillPath, "utf8");
+    validatePluginSkillContent(skillContent, parsed.skill.path);
 
     const manifest: PluginPackManifest = {
       schemaVersion: 1,
@@ -440,6 +505,9 @@ export class PluginManager {
       match: {
         ...(hosts ? { hosts } : {}),
         ...(paths ? { paths } : {})
+      },
+      skill: {
+        path: parsed.skill.path
       }
     };
     if (parsed.description && typeof parsed.description === "string") {

@@ -36,6 +36,7 @@ async function createGitPluginRepo(root: string, input: { pluginId: string; host
         name: "Test Plugin",
         version: "0.1.0",
         entry: "src/index.ts",
+        skill: { path: "SKILL.md" },
         match: { hosts: input.hosts }
       },
       null,
@@ -63,6 +64,28 @@ async function createGitPluginRepo(root: string, input: { pluginId: string; host
       "  }",
       "];",
       ""
+    ].join("\n"),
+    "utf8"
+  );
+
+  await writeFile(
+    join(repoDir, "SKILL.md"),
+    [
+      "---",
+      "name: test-plugin-skill",
+      "description: Test plugin skill document for install flow.",
+      "---",
+      "",
+      "# Test Plugin Skill",
+      "",
+      "## Usage",
+      "1. Install plugin.",
+      "2. Sync/pull page.",
+      "3. Use extract/setValue/invoke through bridge.",
+      "",
+      "## Operations",
+      "- Page functions: refresh()",
+      "- Node functions: click(), focus()"
     ].join("\n"),
     "utf8"
   );
@@ -126,6 +149,7 @@ describe("PluginManager", () => {
           name: "Bad Plugin",
           version: "0.0.1",
           entry: "src/index.ts",
+          skill: { path: "SKILL.md" },
           match: {}
         },
         null,
@@ -135,6 +159,24 @@ describe("PluginManager", () => {
     );
 
     await writeFile(join(repoDir, "src/index.ts"), "export const pluginScripts = [];", "utf8");
+    await writeFile(
+      join(repoDir, "SKILL.md"),
+      [
+        "---",
+        "name: bad-plugin-skill",
+        "description: skill",
+        "---",
+        "",
+        "# Bad Plugin Skill",
+        "",
+        "## Usage",
+        "1. Example",
+        "",
+        "## Operations",
+        "- click()"
+      ].join("\n"),
+      "utf8"
+    );
     await Bun.$`git init`.cwd(repoDir).quiet();
     await Bun.$`git config user.email test@example.com`.cwd(repoDir).quiet();
     await Bun.$`git config user.name test`.cwd(repoDir).quiet();

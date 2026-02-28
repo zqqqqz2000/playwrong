@@ -103,6 +103,9 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
   "name": "Wikipedia Search Helper",
   "version": "0.1.0",
   "entry": "src/index.ts",
+  "skill": {
+    "path": "SKILL.md"
+  },
   "match": {
     "hosts": ["*.wikipedia.org"],
     "paths": ["/wiki/*", "/w/index.php"]
@@ -113,7 +116,12 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 关键字段：
 - `pluginId`：唯一标识
 - `entry`：插件入口 TS 文件（相对路径）
+- `skill.path`：插件 skill 文档（相对路径，必填）
 - `match`：插件生效网站范围（至少 `hosts` 或 `paths` 之一）
+
+`skill.path` 指向的文档必须包含：
+- `## Usage`：怎么使用这个插件
+- `## Operations` 或 `## Functions`：可用操作/函数列表
 
 完整规范见：`plugins/PLUGIN_SPEC.md`
 

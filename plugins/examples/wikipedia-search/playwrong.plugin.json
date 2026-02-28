@@ -5,6 +5,9 @@
   "version": "0.1.0",
   "description": "Expose Wikipedia search input and article links as semantic nodes.",
   "entry": "src/index.ts",
+  "skill": {
+    "path": "SKILL.md"
+  },
   "match": {
     "hosts": ["*.wikipedia.org"],
     "paths": ["/wiki/*", "/w/index.php"]

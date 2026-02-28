@@ -44,6 +44,7 @@ async function createGitPluginRepo(root: string): Promise<string> {
         name: "HTTP Test Plugin",
         version: "0.1.0",
         entry: "src/index.ts",
+        skill: { path: "SKILL.md" },
         match: { hosts: ["example.com"] }
       },
       null,
@@ -64,6 +65,27 @@ async function createGitPluginRepo(root: string): Promise<string> {
       "    async invoke() { throw new Error(\"PLUGIN_MISS\"); }",
       "  }",
       "];"
+    ].join("\n"),
+    "utf8"
+  );
+
+  await writeFile(
+    join(repoDir, "SKILL.md"),
+    [
+      "---",
+      "name: http-test-plugin-skill",
+      "description: Skill document for plugin manager HTTP integration test.",
+      "---",
+      "",
+      "# HTTP Test Plugin Skill",
+      "",
+      "## Usage",
+      "1. Install plugin from git.",
+      "2. Enable plugin and sync/pull page state.",
+      "",
+      "## Operations",
+      "- Page functions: refresh()",
+      "- Node functions: click()"
     ].join("\n"),
     "utf8"
   );

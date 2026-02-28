@@ -5,6 +5,9 @@
   "version": "0.1.0",
   "description": "Expose front-page stories as action nodes for LLM navigation.",
   "entry": "src/index.ts",
+  "skill": {
+    "path": "SKILL.md"
+  },
   "match": {
     "hosts": ["news.ycombinator.com"],
     "paths": ["/", "/news", "/newest", "/best"]
