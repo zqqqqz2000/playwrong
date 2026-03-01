@@ -61,10 +61,29 @@ interface PluginUninstallResponse {
   pluginId: string;
 }
 
+interface HealthResponse {
+  ok: boolean;
+}
+
+interface ExtensionStatusResponse {
+  connected: boolean;
+}
+
+interface ConnectionState {
+  endpoint: string;
+  serverUp: boolean;
+  extensionConnected: boolean;
+  checkedAt: string;
+  error?: string;
+}
+
 const refs = {
   endpointInput: document.querySelector<HTMLInputElement>("#endpointInput"),
   saveEndpointBtn: document.querySelector<HTMLButtonElement>("#saveEndpointBtn"),
+  checkConnectionBtn: document.querySelector<HTMLButtonElement>("#checkConnectionBtn"),
   endpointMsg: document.querySelector<HTMLElement>("#endpointMsg"),
+  connectionBadge: document.querySelector<HTMLElement>("#connectionBadge"),
+  connectionDetail: document.querySelector<HTMLElement>("#connectionDetail"),
   repoUrlInput: document.querySelector<HTMLInputElement>("#repoUrl"),
   repoRefInput: document.querySelector<HTMLInputElement>("#repoRef"),
   repoEnabledInput: document.querySelector<HTMLInputElement>("#repoEnabled"),
@@ -78,11 +97,22 @@ const refs = {
   rawOut: document.querySelector<HTMLElement>("#rawOut")
 };
 
+let lastConnectionState: ConnectionState | null = null;
+let statusPollTimer: ReturnType<typeof setInterval> | null = null;
+let statusPollBusy = false;
+
 function requireRef<T>(value: T | null, id: string): T {
   if (!value) {
     throw new Error(`Missing DOM element: ${id}`);
   }
   return value;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 function showMessage(node: HTMLElement, text: string, isError: boolean): void {
@@ -132,10 +162,7 @@ function httpUrlToWs(httpUrl: string): string {
 }
 
 async function loadServerEndpoint(): Promise<string> {
-  const fromStorage = await chrome.storage.local.get([
-    STORAGE_SERVER_HTTP_URL_KEY,
-    STORAGE_SERVER_WS_URL_KEY
-  ]);
+  const fromStorage = await chrome.storage.local.get([STORAGE_SERVER_HTTP_URL_KEY, STORAGE_SERVER_WS_URL_KEY]);
 
   const serverHttp = fromStorage[STORAGE_SERVER_HTTP_URL_KEY];
   if (typeof serverHttp === "string" && serverHttp.length > 0) {
@@ -167,8 +194,19 @@ async function requestJson<T>(endpoint: string, path: string, method: "GET" | "P
     init.body = JSON.stringify(body);
   }
 
-  const response = await fetch(new URL(path, `${endpoint}/`), init);
-  const payload = (await response.json()) as { error?: { message?: string } } & T;
+  let response: Response;
+  try {
+    response = await fetch(new URL(path, `${endpoint}/`), init);
+  } catch (error) {
+    throw new Error(`Cannot reach ${endpoint}: ${formatError(error)}`);
+  }
+
+  const payload = (await response
+    .json()
+    .catch(() => ({ error: { message: `Invalid JSON response: ${response.status}` } }))) as {
+    error?: { message?: string };
+  } & T;
+
   if (!response.ok) {
     const message = payload.error?.message || `Request failed: ${response.status}`;
     throw new Error(message);
@@ -189,7 +227,95 @@ function formatScope(scope: PluginScopeRule): string {
   return chunks.join(" ");
 }
 
-function createPluginRow(plugin: InstalledPluginRecord, endpoint: string, onReload: () => Promise<void>): HTMLElement {
+function setControlsEnabled(enabled: boolean): void {
+  requireRef(refs.refreshBtn, "refreshBtn").disabled = !enabled;
+  requireRef(refs.installBtn, "installBtn").disabled = !enabled;
+  requireRef(refs.generateBtn, "generateBtn").disabled = !enabled;
+  requireRef(refs.applyBtn, "applyBtn").disabled = !enabled;
+}
+
+function renderConnectionState(state: ConnectionState): void {
+  const badge = requireRef(refs.connectionBadge, "connectionBadge");
+  const detail = requireRef(refs.connectionDetail, "connectionDetail");
+
+  badge.className = "status-pill";
+  if (!state.serverUp) {
+    badge.classList.add("error");
+    badge.textContent = "Server Offline";
+  } else if (state.extensionConnected) {
+    badge.classList.add("connected");
+    badge.textContent = "Bridge Connected";
+  } else {
+    badge.classList.add("warning");
+    badge.textContent = "Server Up / Extension Disconnected";
+  }
+
+  const parts = [`endpoint: ${state.endpoint}`, `checked: ${state.checkedAt}`];
+  if (state.error) {
+    parts.push(`detail: ${state.error}`);
+  }
+  detail.textContent = parts.join(" | ");
+
+  setControlsEnabled(state.serverUp);
+
+  const globalNode = requireRef(refs.globalMsg, "globalMsg");
+  if (!state.serverUp) {
+    showMessage(globalNode, "server unavailable, start bridge server first", true);
+    requireRef(refs.pluginList, "pluginList").innerHTML = "<div class='muted'>Server unavailable.</div>";
+  } else if (!state.extensionConnected) {
+    showMessage(globalNode, "server reachable; waiting extension websocket", true);
+  }
+}
+
+async function fetchConnectionState(endpoint: string): Promise<ConnectionState> {
+  const checkedAt = new Date().toLocaleTimeString();
+
+  try {
+    const health = await requestJson<HealthResponse>(endpoint, "/health", "GET");
+    if (!health.ok) {
+      return {
+        endpoint,
+        serverUp: false,
+        extensionConnected: false,
+        checkedAt,
+        error: "health returned not ok"
+      };
+    }
+
+    try {
+      const extension = await requestJson<ExtensionStatusResponse>(endpoint, "/extension/status", "GET");
+      return {
+        endpoint,
+        serverUp: true,
+        extensionConnected: extension.connected,
+        checkedAt
+      };
+    } catch (error) {
+      return {
+        endpoint,
+        serverUp: true,
+        extensionConnected: false,
+        checkedAt,
+        error: formatError(error)
+      };
+    }
+  } catch (error) {
+    return {
+      endpoint,
+      serverUp: false,
+      extensionConnected: false,
+      checkedAt,
+      error: formatError(error)
+    };
+  }
+}
+
+function createPluginRow(
+  plugin: InstalledPluginRecord,
+  endpoint: string,
+  onReload: () => Promise<void>,
+  allowActions: boolean
+): HTMLElement {
   const row = document.createElement("div");
   row.className = "plugin-item";
 
@@ -211,6 +337,7 @@ function createPluginRow(plugin: InstalledPluginRecord, endpoint: string, onRelo
   const toggle = document.createElement("button");
   toggle.className = "secondary";
   toggle.textContent = plugin.enabled ? "Disable" : "Enable";
+  toggle.disabled = !allowActions;
   toggle.onclick = async () => {
     try {
       const out = await requestJson<PluginToggleResponse>(endpoint, "/plugins/set-enabled", "POST", {
@@ -220,13 +347,14 @@ function createPluginRow(plugin: InstalledPluginRecord, endpoint: string, onRelo
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
       await onReload();
     } catch (error) {
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), String(error), true);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }
   };
 
   const uninstall = document.createElement("button");
   uninstall.className = "danger";
   uninstall.textContent = "Uninstall";
+  uninstall.disabled = !allowActions;
   uninstall.onclick = async () => {
     if (!confirm(`Uninstall ${plugin.pluginId}?`)) {
       return;
@@ -238,7 +366,7 @@ function createPluginRow(plugin: InstalledPluginRecord, endpoint: string, onRelo
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
       await onReload();
     } catch (error) {
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), String(error), true);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }
   };
 
@@ -252,11 +380,11 @@ function createPluginRow(plugin: InstalledPluginRecord, endpoint: string, onRelo
   return row;
 }
 
-async function refreshPlugins(endpoint: string): Promise<void> {
+async function refreshPlugins(endpoint: string, allowActions: boolean): Promise<void> {
   const listNode = requireRef(refs.pluginList, "pluginList");
   const globalNode = requireRef(refs.globalMsg, "globalMsg");
 
-  showMessage(globalNode, "loading...", false);
+  showMessage(globalNode, "loading plugins...", false);
   const data = await requestJson<PluginListResponse>(endpoint, "/plugins", "GET");
   requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(data, null, 2);
 
@@ -265,13 +393,62 @@ async function refreshPlugins(endpoint: string): Promise<void> {
     listNode.innerHTML = "<div class='muted'>No installed plugins.</div>";
   } else {
     for (const plugin of data.plugins) {
-      listNode.appendChild(createPluginRow(plugin, endpoint, async () => {
-        await refreshPlugins(endpoint);
-      }));
+      listNode.appendChild(
+        createPluginRow(plugin, endpoint, async () => {
+          await refreshPlugins(endpoint, allowActions);
+        }, allowActions)
+      );
     }
   }
 
   showMessage(globalNode, `loaded ${data.plugins.length} plugins`, false);
+}
+
+async function refreshConnection(endpoint: string, forceReloadPlugins: boolean): Promise<ConnectionState> {
+  const prev = lastConnectionState;
+  const state = await fetchConnectionState(endpoint);
+  lastConnectionState = state;
+  renderConnectionState(state);
+
+  const recovered = prev ? !prev.serverUp && state.serverUp : false;
+  if (state.serverUp && (forceReloadPlugins || recovered)) {
+    try {
+      await refreshPlugins(endpoint, state.serverUp);
+    } catch (error) {
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
+    }
+  }
+
+  return state;
+}
+
+async function ensureServerUp(endpoint: string): Promise<boolean> {
+  const state = await refreshConnection(endpoint, false);
+  return state.serverUp;
+}
+
+function startStatusPolling(endpointInput: HTMLInputElement): void {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
+
+  statusPollTimer = setInterval(() => {
+    if (statusPollBusy) {
+      return;
+    }
+    statusPollBusy = true;
+    void (async () => {
+      try {
+        const endpoint = normalizeHttpUrl(endpointInput.value);
+        await refreshConnection(endpoint, false);
+      } catch {
+        // no-op
+      } finally {
+        statusPollBusy = false;
+      }
+    })();
+  }, 5000);
 }
 
 async function wire(): Promise<void> {
@@ -288,18 +465,30 @@ async function wire(): Promise<void> {
       const next = await loadServerEndpoint();
       endpointInput.value = next;
       showMessage(endpointMsg, `saved ${next}`, false);
-      await refreshPlugins(next);
+      await refreshConnection(next, true);
     } catch (error) {
-      showMessage(endpointMsg, String(error), true);
+      showMessage(endpointMsg, formatError(error), true);
+    }
+  };
+
+  requireRef(refs.checkConnectionBtn, "checkConnectionBtn").onclick = async () => {
+    try {
+      const endpoint = normalizeHttpUrl(endpointInput.value);
+      await refreshConnection(endpoint, false);
+    } catch (error) {
+      showMessage(endpointMsg, formatError(error), true);
     }
   };
 
   requireRef(refs.refreshBtn, "refreshBtn").onclick = async () => {
     try {
       const endpoint = normalizeHttpUrl(endpointInput.value);
-      await refreshPlugins(endpoint);
+      if (!(await ensureServerUp(endpoint))) {
+        return;
+      }
+      await refreshPlugins(endpoint, true);
     } catch (error) {
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), String(error), true);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }
   };
 
@@ -316,6 +505,10 @@ async function wire(): Promise<void> {
 
     try {
       const endpoint = normalizeHttpUrl(endpointInput.value);
+      if (!(await ensureServerUp(endpoint))) {
+        showMessage(installMsg, "server unavailable", true);
+        return;
+      }
       const out = await requestJson<PluginInstallResponse>(endpoint, "/plugins/install", "POST", {
         repoUrl,
         enabled,
@@ -323,35 +516,49 @@ async function wire(): Promise<void> {
       });
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
       showMessage(installMsg, `installed ${out.plugin.pluginId}`, false);
-      await refreshPlugins(endpoint);
+      await refreshPlugins(endpoint, true);
     } catch (error) {
-      showMessage(installMsg, String(error), true);
+      showMessage(installMsg, formatError(error), true);
     }
   };
 
   requireRef(refs.generateBtn, "generateBtn").onclick = async () => {
     try {
       const endpoint = normalizeHttpUrl(endpointInput.value);
+      if (!(await ensureServerUp(endpoint))) {
+        return;
+      }
       const out = await requestJson<PluginGenerateResponse>(endpoint, "/plugins/generate", "POST", {});
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
       showMessage(requireRef(refs.globalMsg, "globalMsg"), "generated managed plugin registry", false);
     } catch (error) {
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), String(error), true);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }
   };
 
   requireRef(refs.applyBtn, "applyBtn").onclick = async () => {
     try {
       const endpoint = normalizeHttpUrl(endpointInput.value);
+      if (!(await ensureServerUp(endpoint))) {
+        return;
+      }
       const out = await requestJson<PluginApplyResponse>(endpoint, "/plugins/apply", "POST", {});
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
       showMessage(requireRef(refs.globalMsg, "globalMsg"), "generated and built extension", false);
     } catch (error) {
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), String(error), true);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }
   };
 
-  await refreshPlugins(currentEndpoint);
+  await refreshConnection(currentEndpoint, true);
+  startStatusPolling(endpointInput);
+
+  window.addEventListener("unload", () => {
+    if (statusPollTimer) {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
+    }
+  });
 }
 
 void wire();

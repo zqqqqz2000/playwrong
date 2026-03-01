@@ -60,8 +60,11 @@ function toRpcError(error: unknown): ExtensionRpcError {
 }
 
 async function getServerWsUrl(): Promise<string> {
-  // Keep runtime connection deterministic for local bridge runs.
-  // Popup can still update storage, but background always dials the default local endpoint.
+  const fromStorage = await chrome.storage.local.get(STORAGE_SERVER_WS_URL_KEY);
+  const maybeUrl = fromStorage[STORAGE_SERVER_WS_URL_KEY];
+  if (typeof maybeUrl === "string" && maybeUrl.length > 0) {
+    return maybeUrl;
+  }
   return DEFAULT_SERVER_WS_URL;
 }
 

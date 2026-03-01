@@ -54,11 +54,43 @@
       background: var(--primary);
       cursor: pointer;
     }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
     button.secondary { background: #344054; }
     button.danger { background: var(--danger); }
     .muted { color: var(--muted); font-size: 12px; }
     .ok { color: #067647; font-size: 12px; }
     .error { color: #b42318; font-size: 12px; }
+    .status-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+      margin-bottom: 4px;
+    }
+    .status-pill {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e4e7ec;
+      color: #344054;
+    }
+    .status-pill.connected {
+      background: #ecfdf3;
+      color: #067647;
+    }
+    .status-pill.warning {
+      background: #fffaeb;
+      color: #b54708;
+    }
+    .status-pill.error {
+      background: #fef3f2;
+      color: #b42318;
+    }
     .plugin-list { display: grid; gap: 8px; }
     .plugin-item {
       border: 1px solid var(--border);
@@ -104,8 +136,13 @@
       <input id="endpointInput" type="text" placeholder="http://127.0.0.1:7878" />
       <div class="toolbar">
         <button id="saveEndpointBtn">Save Endpoint</button>
+        <button id="checkConnectionBtn" class="secondary">Check Connection</button>
       </div>
       <div id="endpointMsg" class="muted"></div>
+      <div class="status-line">
+        <div id="connectionBadge" class="status-pill">Unknown</div>
+      </div>
+      <div id="connectionDetail" class="muted"></div>
     </section>
 
     <section class="card">

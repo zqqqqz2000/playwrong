@@ -57,6 +57,7 @@ bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
 插件管理 UI（在 Chrome 扩展内）：
 - 点击浏览器工具栏中的 `Playwrong Bridge` 扩展图标打开 popup
 - 在 popup 内可配置 server endpoint、从 git 安装插件、启用/禁用、卸载、生成与构建
+- popup 会显示连接状态（`Server Offline` / `Server Up / Extension Disconnected` / `Bridge Connected`）
 
 ### 4. 查看扩展侧页面
 ```bash
@@ -310,3 +311,4 @@ tests/
 ## 设计文档
 
 - 详细规格：`docs/SPEC.md`
+- V2 规划：`docs/V2.md`
