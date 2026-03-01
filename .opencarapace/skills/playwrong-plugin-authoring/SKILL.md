@@ -61,6 +61,10 @@ For each new plugin, always create or update these files:
   - exact selector
   - semantic fallback (`id/name/aria/placeholder`)
   - global fallback scan
+- Prefer runtime instance APIs over DOM scraping when available:
+  - Example: for Monaco-based editors, first try editor/model instances (`window.monaco.editor.getEditors()` + model `getValue/setValue`) through a safe bridge.
+  - Use DOM fallback only when instance APIs are unavailable or blocked.
+  - Keep this logic generic (capability bridge in runtime, site behavior in mapping plugin), avoid hardcoding site-specific rules in core runtime.
 
 4. Add a debug function.
 - Add one no-side-effect function (for example `debugForm` / `debugNodes`) to return what plugin can see.
@@ -83,6 +87,7 @@ For each new plugin, always create or update these files:
 - Skill doc includes `Usage`, `Operations`, `Failure Modes`.
 - `sync/page` returns expected `pageType` + key ids.
 - Action succeeds without direct CDP/Playwright DOM scripting.
+- For framework/editor pages, instance-first path is verified before DOM fallback.
 - `mapping-plugins install|enable|reload|uninstall` path is verified for the target plugin.
 
 ## References

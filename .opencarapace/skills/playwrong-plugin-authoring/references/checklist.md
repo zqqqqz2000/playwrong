@@ -20,6 +20,8 @@
 - Verify `/sync/page` returns expected `pageType`.
 - Verify `/pull` includes expected XML nodes or editable files.
 - Verify `/call` and `/apply` increment rev and produce observable state changes.
+- For Monaco/CodeMirror-like editors, verify instance-first read/write path before DOM fallback.
+- If main-world access is required, keep bridge generic and leave page-specific selection logic in the mapping plugin.
 
 ## Failure Coverage
 

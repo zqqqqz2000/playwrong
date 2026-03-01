@@ -152,6 +152,113 @@ async function ensureContentBridgeInjected(): Promise<void> {
   }
 }
 
+type MainWorldMonacoAction = "read" | "set";
+
+interface MainWorldMonacoResponse {
+  ok: boolean;
+  value?: string;
+  reason?: string;
+  error?: string;
+}
+
+async function callMonacoInMainWorld(
+  tabId: number,
+  action: MainWorldMonacoAction,
+  value?: string
+): Promise<MainWorldMonacoResponse> {
+  const request: { action: MainWorldMonacoAction; value?: string } = { action };
+  if (value !== undefined) {
+    request.value = value;
+  }
+
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: (request: { action: MainWorldMonacoAction; value?: string }) => {
+      const globalObj = window as unknown as {
+        monaco?: {
+          editor?: {
+            getEditors?: () => Array<{
+              hasTextFocus?: () => boolean;
+              getModel?: () => {
+                getValue?: () => string | null | undefined;
+                setValue?: (next: string) => void;
+              } | null;
+            }>;
+          };
+        };
+      };
+
+      const editors = globalObj.monaco?.editor?.getEditors?.() ?? [];
+      if (!Array.isArray(editors) || editors.length === 0) {
+        return {
+          ok: false,
+          reason: "no_monaco_editors"
+        };
+      }
+
+      const focused = editors.find((editor) => editor?.hasTextFocus?.() === true);
+      const ordered = focused ? [focused, ...editors.filter((editor) => editor !== focused)] : editors;
+      const model = ordered
+        .map((editor) => editor?.getModel?.())
+        .find((candidate) => candidate && typeof candidate.getValue === "function");
+      if (!model) {
+        return {
+          ok: false,
+          reason: "no_monaco_model"
+        };
+      }
+
+      if (request.action === "set") {
+        if (typeof model.setValue !== "function") {
+          return {
+            ok: false,
+            reason: "no_monaco_setter"
+          };
+        }
+        model.setValue(typeof request.value === "string" ? request.value : "");
+        return {
+          ok: true
+        };
+      }
+
+      const raw = model.getValue?.();
+      return {
+        ok: true,
+        value: typeof raw === "string" ? raw : String(raw ?? "")
+      };
+    },
+    args: [request]
+  });
+
+  if (!result || typeof result.result !== "object" || result.result === null) {
+    return {
+      ok: false,
+      error: "invalid_main_world_response"
+    };
+  }
+
+  const payload = result.result as {
+    ok?: unknown;
+    value?: unknown;
+    reason?: unknown;
+    error?: unknown;
+  };
+  const response: MainWorldMonacoResponse = {
+    ok: payload.ok === true
+  };
+  if (typeof payload.value === "string") {
+    response.value = payload.value;
+  }
+  if (typeof payload.reason === "string") {
+    response.reason = payload.reason;
+  }
+  if (typeof payload.error === "string") {
+    response.error = payload.error;
+  }
+  return response;
+}
+
 async function listRemotePages(): Promise<ExtensionRpcResultByMethod["pages.list"]> {
   const tabs = await getTrackableTabs();
   return tabs.map((tab) => {
@@ -460,11 +567,45 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") {
     return;
   }
   const type = (message as { type?: unknown }).type;
+  if (type === "playwrong.mainworld.monaco") {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({
+        ok: false,
+        error: "Cannot resolve sender tab"
+      } satisfies MainWorldMonacoResponse);
+      return;
+    }
+
+    const actionRaw = (message as { action?: unknown }).action;
+    if (actionRaw !== "read" && actionRaw !== "set") {
+      sendResponse({
+        ok: false,
+        error: "Invalid main world Monaco action"
+      } satisfies MainWorldMonacoResponse);
+      return;
+    }
+    const valueRaw = (message as { value?: unknown }).value;
+    const nextValue = typeof valueRaw === "string" ? valueRaw : undefined;
+
+    void callMonacoInMainWorld(tabId, actionRaw, nextValue)
+      .then((result) => {
+        sendResponse(result);
+      })
+      .catch((error: unknown) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        } satisfies MainWorldMonacoResponse);
+      });
+    return true;
+  }
+
   if (type !== "playwrong.wakeup") {
     return;
   }
