@@ -78,10 +78,10 @@ const ENGINE_CONFIGS: SearchEngineConfig[] = [
   {
     scriptId: "bing.search",
     pageType: "bing.search",
-    hosts: ["bing.com", "www.bing.com"],
+    hosts: ["bing.com", "www.bing.com", "*.bing.com", "*.bing.*"],
     titleTokens: ["bing"],
-    inputSelectors: ["textarea[name='q']", "input[name='q']"],
-    submitSelectors: ["button[type='submit']", "input[type='submit']"],
+    inputSelectors: ["input#sb_form_q", "textarea[name='q']", "input[name='q']", "input[type='search']"],
+    submitSelectors: ["input#sb_form_go", "button[type='submit']", "input[type='submit']"],
     resultTitleSelectors: ["#b_results li.b_algo h2 a", "#b_results h2 a", "h2 a"],
     nextPageSelectors: ["a.sb_pagN", "a[title='Next page']", "a[aria-label='Next page']"]
   },

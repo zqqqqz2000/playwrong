@@ -232,6 +232,7 @@ bun test
 ```bash
 bun run test:e2e:browser-google
 bun run test:e2e:browser-google:real
+bun run test:e2e:capability-10-sites
 bun run test:e2e:codex-google
 bun run test:e2e:codex-google:real
 ```

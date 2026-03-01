@@ -27,8 +27,8 @@ interface LocalExtractResult {
 
 const INTERACTIVE_SELECTOR =
   "input,textarea,select,button,a[href],[contenteditable='true'],[role='button'],[role='textbox'],[role='link']";
-const SEARCH_QUERY_SELECTOR = "input[name='q'],textarea[name='q']";
-const SEARCH_SUBMIT_SELECTOR = "button[type='submit'],input[type='submit'],input[name='btnK']";
+const SEARCH_QUERY_SELECTOR = "input[name='q'],textarea[name='q'],input#sb_form_q";
+const SEARCH_SUBMIT_SELECTOR = "button[type='submit'],input[type='submit'],input[name='btnK'],input#sb_form_go";
 const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
 
 const pluginHost = new ExtensionPluginHost([...createBuiltinSiteScripts(), ...userPluginScripts]);
