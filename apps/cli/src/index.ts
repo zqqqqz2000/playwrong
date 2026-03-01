@@ -273,7 +273,8 @@ function parseSubcommand(args: string[]): { subcommand: string; flags: FlagMap }
   const first = args[0];
   if (!first || first.startsWith("--")) {
     throw new Error(
-      "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]"
+      "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]\n" +
+        "Install flags: --repo-url <git> | --dir <plugin-dir> | --zip <plugin.zip> | --source <git|dir|zip> --path <value>"
     );
   }
   return {
@@ -293,13 +294,49 @@ async function cmdMappingPlugins(args: string[]): Promise<void> {
   }
 
   if (subcommand === "install" || subcommand === "add") {
-    const repoUrl = getFlag(flags, "repo-url");
+    const source = flags.source && typeof flags.source === "string" ? flags.source.trim().toLowerCase() : "";
+    const dirPath = flags.dir && typeof flags.dir === "string" ? flags.dir.trim() : "";
+    const zipPath = flags.zip && typeof flags.zip === "string" ? flags.zip.trim() : "";
+    const path = flags.path && typeof flags.path === "string" ? flags.path.trim() : "";
+    const repoUrl = flags["repo-url"] && typeof flags["repo-url"] === "string" ? flags["repo-url"].trim() : "";
     const ref = flags.ref && typeof flags.ref === "string" ? flags.ref : undefined;
     const enabled = getOptionalBooleanFlag(flags, "enabled");
-    const payload: { repoUrl: string; ref?: string; enabled?: boolean } = { repoUrl };
-    if (ref) {
-      payload.ref = ref;
+
+    if ([Boolean(dirPath), Boolean(zipPath)].filter(Boolean).length > 1) {
+      throw new Error("Use only one of --dir or --zip");
     }
+
+    const payload: {
+      sourceType?: "git" | "dir" | "zip";
+      repoUrl?: string;
+      path?: string;
+      ref?: string;
+      enabled?: boolean;
+    } = {};
+
+    if (source === "dir" || source === "directory" || dirPath) {
+      payload.sourceType = "dir";
+      payload.path = dirPath || path;
+      if (!payload.path) {
+        throw new Error("Missing required flag --dir <plugin-directory> (or --source dir --path <plugin-directory>)");
+      }
+    } else if (source === "zip" || zipPath) {
+      payload.sourceType = "zip";
+      payload.path = zipPath || path;
+      if (!payload.path) {
+        throw new Error("Missing required flag --zip <plugin.zip> (or --source zip --path <plugin.zip>)");
+      }
+    } else {
+      payload.sourceType = "git";
+      payload.repoUrl = repoUrl || (source === "git" ? path : "");
+      if (!payload.repoUrl) {
+        throw new Error("Missing required flag --repo-url <git-repo> (or --source git --path <git-repo>)");
+      }
+      if (ref) {
+        payload.ref = ref;
+      }
+    }
+
     if (enabled !== undefined) {
       payload.enabled = enabled;
     }

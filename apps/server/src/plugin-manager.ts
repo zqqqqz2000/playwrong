@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { BridgeError } from "@playwrong/protocol";
 
@@ -28,6 +28,18 @@ export interface PluginSourceGit {
   ref?: string;
 }
 
+export interface PluginSourceDirectory {
+  type: "directory";
+  path: string;
+}
+
+export interface PluginSourceZip {
+  type: "zip";
+  path: string;
+}
+
+export type PluginSource = PluginSourceGit | PluginSourceDirectory | PluginSourceZip;
+
 export interface InstalledPluginRecord {
   pluginId: string;
   name: string;
@@ -37,7 +49,7 @@ export interface InstalledPluginRecord {
   match: PluginScopeRule;
   skillPath?: string;
   enabled: boolean;
-  source: PluginSourceGit;
+  source: PluginSource;
   installedAt: string;
   updatedAt: string;
   dirName: string;
@@ -50,6 +62,24 @@ interface PluginRegistryFile {
 
 export interface InstallPluginFromGitInput {
   repoUrl: string;
+  ref?: string;
+  enabled?: boolean;
+}
+
+export interface InstallPluginFromDirectoryInput {
+  path: string;
+  enabled?: boolean;
+}
+
+export interface InstallPluginFromZipInput {
+  path: string;
+  enabled?: boolean;
+}
+
+export interface InstallPluginInput {
+  sourceType?: "git" | "dir" | "zip";
+  repoUrl?: string;
+  path?: string;
   ref?: string;
   enabled?: boolean;
 }
@@ -214,48 +244,152 @@ export class PluginManager {
       .map((plugin) => ({ ...plugin }));
   }
 
+  async install(input: InstallPluginInput): Promise<InstalledPluginRecord> {
+    const sourceTypeRaw = typeof input.sourceType === "string" ? input.sourceType : "git";
+    const sourceType = sourceTypeRaw.trim().toLowerCase();
+    if (sourceType === "git") {
+      const repoUrl = input.repoUrl ?? "";
+      const nextInput: InstallPluginFromGitInput = { repoUrl };
+      if (input.ref !== undefined) {
+        nextInput.ref = input.ref;
+      }
+      if (input.enabled !== undefined) {
+        nextInput.enabled = input.enabled;
+      }
+      return this.installFromGit(nextInput);
+    }
+    if (sourceType === "dir") {
+      const nextInput: InstallPluginFromDirectoryInput = { path: input.path ?? "" };
+      if (input.enabled !== undefined) {
+        nextInput.enabled = input.enabled;
+      }
+      return this.installFromDirectory(nextInput);
+    }
+    if (sourceType === "zip") {
+      const nextInput: InstallPluginFromZipInput = { path: input.path ?? "" };
+      if (input.enabled !== undefined) {
+        nextInput.enabled = input.enabled;
+      }
+      return this.installFromZip(nextInput);
+    }
+    throw new BridgeError("INVALID_REQUEST", "sourceType must be one of git|dir|zip", {
+      sourceType
+    });
+  }
+
   async installFromGit(input: InstallPluginFromGitInput): Promise<InstalledPluginRecord> {
     if (!input.repoUrl || input.repoUrl.trim().length === 0) {
       throw new BridgeError("INVALID_REQUEST", "repoUrl is required", { field: "repoUrl" });
     }
+    const repoUrl = input.repoUrl.trim();
 
     await this.ensureBaseDirs();
 
-    const tmpDir = join(this.pluginsRootDir, `.tmp-install-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+    const stageDir = this.newTmpInstallDir("stage");
+    const source: PluginSourceGit = {
+      type: "git",
+      repoUrl
+    };
+    if (input.ref) {
+      source.ref = input.ref;
+    }
+
     try {
-      await this.runCommand(["git", "clone", "--depth", "1", input.repoUrl, tmpDir], this.workspaceRoot);
+      await this.runCommand(["git", "clone", "--depth", "1", repoUrl, stageDir], this.workspaceRoot);
       if (input.ref && input.ref.trim().length > 0) {
-        await this.runCommand(["git", "-C", tmpDir, "checkout", input.ref], this.workspaceRoot);
+        await this.runCommand(["git", "-C", stageDir, "checkout", input.ref], this.workspaceRoot);
       }
-
-      const manifest = await this.readManifest(tmpDir);
-      const dirName = sanitizePluginDirName(manifest.pluginId);
-      const destDir = join(this.installedRootDir, dirName);
-      await rm(destDir, { recursive: true, force: true });
-      await rename(tmpDir, destDir);
-
-      const enabled = input.enabled ?? true;
-      const next = await this.upsertRecordFromManifest(manifest, {
-        dirName,
-        enabled,
-        source: {
-          type: "git",
-          repoUrl: input.repoUrl,
-          ...(input.ref ? { ref: input.ref } : {})
-        }
+      return this.installFromStageDir({
+        stageDir,
+        enabled: input.enabled ?? true,
+        source
       });
-
-      await this.generateManagedPluginsFile();
-      return next;
     } catch (error) {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(stageDir, { recursive: true, force: true });
       if (error instanceof BridgeError) {
         throw error;
       }
       throw new BridgeError("ACTION_FAIL", "Failed to install plugin from git", {
-        repoUrl: input.repoUrl,
+        repoUrl,
         reason: error instanceof Error ? error.message : String(error)
       });
+    }
+  }
+
+  async installFromDirectory(input: InstallPluginFromDirectoryInput): Promise<InstalledPluginRecord> {
+    if (!input.path || input.path.trim().length === 0) {
+      throw new BridgeError("INVALID_REQUEST", "path is required", { field: "path" });
+    }
+    const rawPath = input.path.trim();
+
+    await this.ensureBaseDirs();
+
+    const sourcePath = this.resolveInputPath(rawPath);
+    await this.assertFileExists(sourcePath, "Plugin directory not found");
+    const stageDir = this.newTmpInstallDir("stage");
+    try {
+      await cp(sourcePath, stageDir, {
+        recursive: true,
+        force: true
+      });
+      return this.installFromStageDir({
+        stageDir,
+        enabled: input.enabled ?? true,
+        source: {
+          type: "directory",
+          path: sourcePath
+        }
+      });
+    } catch (error) {
+      await rm(stageDir, { recursive: true, force: true });
+      if (error instanceof BridgeError) {
+        throw error;
+      }
+      throw new BridgeError("ACTION_FAIL", "Failed to install plugin from directory", {
+        path: rawPath,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  async installFromZip(input: InstallPluginFromZipInput): Promise<InstalledPluginRecord> {
+    if (!input.path || input.path.trim().length === 0) {
+      throw new BridgeError("INVALID_REQUEST", "path is required", { field: "path" });
+    }
+    const rawPath = input.path.trim();
+
+    await this.ensureBaseDirs();
+
+    const zipPath = this.resolveInputPath(rawPath);
+    await this.assertFileExists(zipPath, "Plugin zip not found");
+    const extractDir = this.newTmpInstallDir("extract");
+    const stageDir = this.newTmpInstallDir("stage");
+    try {
+      await this.runCommand(["unzip", "-q", zipPath, "-d", extractDir], this.workspaceRoot);
+      const pluginRoot = await this.findPluginRoot(extractDir);
+      await cp(pluginRoot, stageDir, {
+        recursive: true,
+        force: true
+      });
+      return this.installFromStageDir({
+        stageDir,
+        enabled: input.enabled ?? true,
+        source: {
+          type: "zip",
+          path: zipPath
+        }
+      });
+    } catch (error) {
+      await rm(stageDir, { recursive: true, force: true });
+      if (error instanceof BridgeError) {
+        throw error;
+      }
+      throw new BridgeError("ACTION_FAIL", "Failed to install plugin from zip", {
+        path: rawPath,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await rm(extractDir, { recursive: true, force: true });
     }
   }
 
@@ -392,6 +526,79 @@ export class PluginManager {
     return { generated, build };
   }
 
+  private newTmpInstallDir(kind: "stage" | "extract"): string {
+    return join(this.pluginsRootDir, `.tmp-install-${kind}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+  }
+
+  private resolveInputPath(pathValue: string): string {
+    if (isAbsolute(pathValue)) {
+      return pathValue;
+    }
+    return join(this.workspaceRoot, pathValue);
+  }
+
+  private async findPluginRoot(extractDir: string): Promise<string> {
+    const queue: string[] = [extractDir];
+    const visited = new Set<string>();
+    let scanned = 0;
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current || visited.has(current)) {
+        continue;
+      }
+      visited.add(current);
+      scanned += 1;
+      if (scanned > 400) {
+        break;
+      }
+
+      const manifestPath = join(current, "playwrong.plugin.json");
+      try {
+        await access(manifestPath);
+        return current;
+      } catch {
+        // continue scanning
+      }
+
+      const entries = await readdir(current, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (entry.name === ".git" || entry.name === "node_modules") {
+          continue;
+        }
+        queue.push(join(current, entry.name));
+      }
+    }
+
+    throw new BridgeError("NOT_FOUND", "Missing playwrong.plugin.json in zip package", {
+      path: extractDir
+    });
+  }
+
+  private async installFromStageDir(input: {
+    stageDir: string;
+    enabled: boolean;
+    source: PluginSource;
+  }): Promise<InstalledPluginRecord> {
+    const manifest = await this.readManifest(input.stageDir);
+    const dirName = sanitizePluginDirName(manifest.pluginId);
+    const destDir = join(this.installedRootDir, dirName);
+    await rm(destDir, { recursive: true, force: true });
+    await rename(input.stageDir, destDir);
+
+    const next = await this.upsertRecordFromManifest(manifest, {
+      dirName,
+      enabled: input.enabled,
+      source: input.source
+    });
+
+    await this.generateManagedPluginsFile();
+    return next;
+  }
+
   private async resolvePluginEntryPath(plugin: InstalledPluginRecord): Promise<string> {
     const rootDir = join(this.installedRootDir, plugin.dirName);
     const entryPath = join(rootDir, plugin.entry);
@@ -401,7 +608,7 @@ export class PluginManager {
 
   private async upsertRecordFromManifest(
     manifest: PluginPackManifest,
-    input: { dirName: string; enabled: boolean; source: PluginSourceGit }
+    input: { dirName: string; enabled: boolean; source: PluginSource }
   ): Promise<InstalledPluginRecord> {
     const registry = await this.readRegistry();
     const now = nowIso();

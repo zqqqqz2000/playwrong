@@ -25,7 +25,9 @@ interface SyncPageRequest {
 }
 
 interface InstallPluginRequest {
-  repoUrl: string;
+  sourceType?: "git" | "dir" | "zip";
+  repoUrl?: string;
+  path?: string;
   ref?: string;
   enabled?: boolean;
 }
@@ -120,12 +122,7 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
 
         if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/install")) {
           const payload = await readJson<InstallPluginRequest>(request);
-          if (!payload.repoUrl) {
-            throw new BridgeError("INVALID_REQUEST", "repoUrl is required", {
-              field: "repoUrl"
-            });
-          }
-          const plugin = await pluginManager.installFromGit(payload);
+          const plugin = await pluginManager.install(payload);
           return json(200, { plugin });
         }
 

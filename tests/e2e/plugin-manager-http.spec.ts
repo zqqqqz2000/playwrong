@@ -31,8 +31,8 @@ async function createWorkspace(): Promise<string> {
   return root;
 }
 
-async function createGitPluginRepo(root: string): Promise<string> {
-  const repoDir = join(root, "http-plugin-repo");
+async function createPluginDir(root: string, dirName = "http-plugin-repo"): Promise<string> {
+  const repoDir = join(root, dirName);
   await mkdir(join(repoDir, "src"), { recursive: true });
 
   await writeFile(
@@ -93,12 +93,16 @@ async function createGitPluginRepo(root: string): Promise<string> {
     "utf8"
   );
 
+  return repoDir;
+}
+
+async function createGitPluginRepo(root: string): Promise<string> {
+  const repoDir = await createPluginDir(root);
   await Bun.$`git init`.cwd(repoDir).quiet();
   await Bun.$`git config user.email test@example.com`.cwd(repoDir).quiet();
   await Bun.$`git config user.name test`.cwd(repoDir).quiet();
   await Bun.$`git add .`.cwd(repoDir).quiet();
   await Bun.$`git commit -m init`.cwd(repoDir).quiet();
-
   return repoDir;
 }
 
@@ -175,6 +179,16 @@ describe("Plugin manager HTTP routes", () => {
       {}
     );
     expect(generateResult.generated.enabledCount).toBe(0);
+
+    const localDir = await createPluginDir(workspace, "http-plugin-dir");
+    const installFromDir = await requestJson<{ plugin: { pluginId: string; enabled: boolean } }>(
+      baseUrl,
+      "/mapping-plugins/install",
+      "POST",
+      { sourceType: "dir", path: localDir, enabled: true }
+    );
+    expect(installFromDir.plugin.pluginId).toBe("example.http.plugin");
+    expect(installFromDir.plugin.enabled).toBe(true);
 
     const uninstallResult = await requestJson<{ ok: boolean }>(baseUrl, "/mapping-plugins/uninstall", "POST", {
       pluginId: "example.http.plugin"

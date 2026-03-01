@@ -10,6 +10,9 @@
   },
   "scripts": {
     "plugins:generate": "bun scripts/generate-managed-plugins.ts",
+    "build:extension": "bun run --cwd apps/extension build",
+    "cli": "bun apps/cli/src/index.ts",
+    "cli:serve": "bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test",
     "test:unit": "bun test tests/unit",

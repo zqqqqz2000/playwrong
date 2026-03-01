@@ -14,6 +14,18 @@ interface PluginSourceGit {
   ref?: string;
 }
 
+interface PluginSourceDirectory {
+  type: "directory";
+  path: string;
+}
+
+interface PluginSourceZip {
+  type: "zip";
+  path: string;
+}
+
+type PluginSource = PluginSourceGit | PluginSourceDirectory | PluginSourceZip;
+
 interface InstalledPluginRecord {
   pluginId: string;
   name: string;
@@ -21,7 +33,7 @@ interface InstalledPluginRecord {
   description?: string;
   match: PluginScopeRule;
   enabled: boolean;
-  source: PluginSourceGit;
+  source: PluginSource;
 }
 
 interface PluginListResponse {
@@ -227,6 +239,16 @@ function formatScope(scope: PluginScopeRule): string {
   return chunks.join(" ");
 }
 
+function formatPluginSource(source: PluginSource): string {
+  if (source.type === "git") {
+    return `${source.repoUrl}${source.ref ? `#${source.ref}` : ""}`;
+  }
+  if (source.type === "directory") {
+    return `dir:${source.path}`;
+  }
+  return `zip:${source.path}`;
+}
+
 function setControlsEnabled(enabled: boolean): void {
   requireRef(refs.refreshBtn, "refreshBtn").disabled = !enabled;
   requireRef(refs.installBtn, "installBtn").disabled = !enabled;
@@ -325,7 +347,7 @@ function createPluginRow(
 
   const source = document.createElement("div");
   source.className = "plugin-meta";
-  source.textContent = `source: ${plugin.source.repoUrl}${plugin.source.ref ? `#${plugin.source.ref}` : ""}`;
+  source.textContent = `source: ${formatPluginSource(plugin.source)}`;
 
   const scope = document.createElement("div");
   scope.className = "plugin-meta";

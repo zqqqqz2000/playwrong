@@ -23,8 +23,11 @@ async function createTempWorkspace(): Promise<string> {
   return dir;
 }
 
-async function createGitPluginRepo(root: string, input: { pluginId: string; hosts: string[] }): Promise<string> {
-  const repoDir = join(root, "plugin-repo");
+async function createPluginDir(
+  root: string,
+  input: { pluginId: string; hosts: string[]; dirName?: string }
+): Promise<string> {
+  const repoDir = join(root, input.dirName ?? "plugin-repo");
   await mkdir(join(repoDir, "src"), { recursive: true });
 
   await writeFile(
@@ -94,12 +97,16 @@ async function createGitPluginRepo(root: string, input: { pluginId: string; host
     "utf8"
   );
 
+  return repoDir;
+}
+
+async function createGitPluginRepo(root: string, input: { pluginId: string; hosts: string[] }): Promise<string> {
+  const repoDir = await createPluginDir(root, input);
   await Bun.$`git init`.cwd(repoDir).quiet();
   await Bun.$`git config user.email test@example.com`.cwd(repoDir).quiet();
   await Bun.$`git config user.name test`.cwd(repoDir).quiet();
   await Bun.$`git add .`.cwd(repoDir).quiet();
   await Bun.$`git commit -m init`.cwd(repoDir).quiet();
-
   return repoDir;
 }
 
@@ -137,6 +144,55 @@ describe("PluginManager", () => {
     await manager.uninstallPlugin("example.local.plugin");
     const listed3 = await manager.listPlugins();
     expect(listed3).toHaveLength(0);
+  });
+
+  it("installs plugin from a local directory path", async () => {
+    const workspace = await createTempWorkspace();
+    const pluginDir = await createPluginDir(workspace, {
+      pluginId: "example.local.dir.plugin",
+      hosts: ["example.com"],
+      dirName: "local-plugin-dir"
+    });
+
+    const manager = new PluginManager({ workspaceRoot: workspace });
+    const installed = await manager.installFromDirectory({ path: pluginDir, enabled: true });
+
+    expect(installed.pluginId).toBe("example.local.dir.plugin");
+    expect(installed.enabled).toBe(true);
+    expect(installed.source.type).toBe("directory");
+
+    const listed = await manager.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.pluginId).toBe("example.local.dir.plugin");
+  });
+
+  it("installs plugin from a zip archive path", async () => {
+    const workspace = await createTempWorkspace();
+    const manager = new PluginManager({ workspaceRoot: workspace });
+
+    try {
+      await Bun.$`which zip`.quiet();
+      await Bun.$`which unzip`.quiet();
+    } catch {
+      return;
+    }
+
+    await createPluginDir(workspace, {
+      pluginId: "example.local.zip.plugin",
+      hosts: ["example.com"],
+      dirName: "local-plugin-zip-src"
+    });
+
+    const zipPath = join(workspace, "local-plugin.zip");
+    await Bun.$`zip -qr ${zipPath} local-plugin-zip-src`.cwd(workspace).quiet();
+
+    const installed = await manager.installFromZip({ path: zipPath, enabled: true });
+    expect(installed.pluginId).toBe("example.local.zip.plugin");
+    expect(installed.source.type).toBe("zip");
+
+    const listed = await manager.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.pluginId).toBe("example.local.zip.plugin");
   });
 
   it("rejects plugin manifest without match scope", async () => {
