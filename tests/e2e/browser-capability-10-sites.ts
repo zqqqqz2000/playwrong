@@ -58,6 +58,7 @@ const EXTENSION_DIST = join(ROOT, "apps/extension/dist");
 const USER_DATA_DIR = join(ROOT, "tmp/e2e/capability-10-sites-user-data");
 const REPORT_DIR = join(ROOT, "tmp/e2e/capability-10-sites");
 const DEFAULT_ENDPOINT = "http://127.0.0.1:7878";
+const HEADLESS = !["0", "false", "no"].includes((process.env.PLAYWRONG_E2E_HEADLESS ?? "1").toLowerCase());
 
 const SEARCH_QUERY = "playwrong llm automation";
 
@@ -540,7 +541,7 @@ async function main(): Promise<void> {
 
   const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     channel: "chromium",
-    headless: true,
+    headless: HEADLESS,
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     locale: "en-US",
