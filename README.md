@@ -12,18 +12,18 @@ Playwrong provides a stable abstraction layer between web pages and language mod
 - XML snapshot generation for live browser state
 - Editable field extraction for deterministic text updates
 - Function-level actions for page and element operations
-- Plugin-driven site specialization for domain workflows
+- Mapping plugin driven site specialization for domain workflows
 - CLI and extension runtime for local or integrated operation
 
 ### Architecture
 
-- `apps/cli` exposes command workflows such as serve, sync, pull, apply, call
+- `apps/cli` exposes command workflows such as serve, sync, pull, apply, call, mapping-plugins
 - `apps/server` provides HTTP and WebSocket gateway services
 - `apps/extension` runs Chrome MV3 scripts and bridge communication
 - `packages/protocol` defines protocol types, XML rendering, and error model
 - `packages/plugin-sdk` provides matcher, locator, and plugin interfaces
-- `plugins` stores specification, examples, installed plugins, and registry state
-- `skills` contains Codex workflow skills for fast path automation and plugin authoring
+- `plugins` stores mapping plugin specification, examples, installed plugins, and registry state
+- `skills` contains Codex workflow skills for fast path automation and mapping plugin authoring
 
 ### Quick Start
 
@@ -97,9 +97,9 @@ Invoke page function
 bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:123456 --id page --fn search --args '{"query":"playwrong llm automation"}'
 ```
 
-### Plugin Framework
+### Mapping Plugin Framework
 
-Plugin repository must include `playwrong.plugin.json` at root.
+Mapping plugin repository must include `playwrong.plugin.json` at root.
 
 Required manifest fields
 
@@ -132,6 +132,43 @@ bun run plugins:generate
 ```
 
 Specification document: `plugins/PLUGIN_SPEC.md`.
+
+### Mapping Plugin Management via CLI
+
+List mapping plugins
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
+```
+
+Install mapping plugin from git
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
+```
+
+Enable or disable mapping plugin
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins enable --endpoint http://127.0.0.1:7878 --id example.http.plugin
+bun apps/cli/src/index.ts mapping-plugins disable --endpoint http://127.0.0.1:7878 --id example.http.plugin
+```
+
+Uninstall mapping plugin
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id example.http.plugin
+```
+
+Reload mapping plugin build
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
+```
+
+`reload` regenerates managed mapping scripts and rebuilds extension artifacts.
+
+Use skill `.opencarapace/skills/playwrong-plugin-authoring` to guide mapping plugin implementation and validation with this command set.
 
 ### LLM Interaction Contract
 
@@ -189,17 +226,22 @@ bun test tests/e2e/plugin-manager-http.spec.ts
 - `GET /extension/status`
 - `GET /pages`
 - `GET /pages/remote`
-- `GET /plugins`
+- `GET /mapping-plugins`
 - `POST /sync/page`
 - `POST /sync/all`
 - `POST /pull`
 - `POST /apply`
 - `POST /call`
-- `POST /plugins/install`
-- `POST /plugins/set-enabled`
-- `POST /plugins/uninstall`
-- `POST /plugins/generate`
-- `POST /plugins/apply`
+- `POST /mapping-plugins/install`
+- `POST /mapping-plugins/set-enabled`
+- `POST /mapping-plugins/uninstall`
+- `POST /mapping-plugins/generate`
+- `POST /mapping-plugins/apply`
+- `POST /mapping-plugins/reload`
+
+Compatibility note
+
+- Legacy `/plugins` endpoints are still supported for backward compatibility.
 
 ### Repository Layout
 
@@ -215,9 +257,11 @@ plugins/
   PLUGIN_SPEC.md
   examples/
   installed/
+.opencarapace/
+  skills/
+    playwrong-plugin-authoring/
 skills/
   playwrong-google-search-fastpath/
-  playwrong-plugin-authoring/
 tests/
   unit/
   e2e/
@@ -261,18 +305,18 @@ Playwrong 是面向生产场景的浏览器自动化桥接层。
 - 生成可读、可对比的页面 XML 快照
 - 提取可编辑字段并支持确定性回写
 - 提供节点级与页面级函数调用模型
-- 支持插件化站点适配与领域流程扩展
+- 支持映射插件化站点适配与领域流程扩展
 - 提供 CLI 与扩展协同运行模式
 
 ### 架构组成
 
-- `apps/cli` 提供 serve、sync、pull、apply、call 等命令入口
+- `apps/cli` 提供 serve、sync、pull、apply、call、mapping-plugins 等命令入口
 - `apps/server` 提供 HTTP 与 WebSocket 网关
 - `apps/extension` 负责 Chrome MV3 侧脚本与桥接通信
 - `packages/protocol` 定义协议类型、XML 渲染与错误模型
 - `packages/plugin-sdk` 提供匹配器、定位器与插件接口
-- `plugins` 存放规范、示例、安装目录与注册状态
-- `skills` 存放 Codex 自动化流程能力
+- `plugins` 存放映射插件规范、示例、安装目录与注册状态
+- `skills` 存放 Codex 自动化流程能力，包含映射插件编写流程
 
 ### 快速开始
 
@@ -346,9 +390,9 @@ bun apps/cli/src/index.ts apply --endpoint http://127.0.0.1:7878 --page tab:1234
 bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:123456 --id page --fn search --args '{"query":"playwrong llm automation"}'
 ```
 
-### 插件体系
+### 映射插件体系
 
-插件仓库根目录需要提供 `playwrong.plugin.json`。
+映射插件仓库根目录需要提供 `playwrong.plugin.json`。
 
 关键字段
 
@@ -381,6 +425,47 @@ bun run plugins:generate
 ```
 
 完整规范见 `plugins/PLUGIN_SPEC.md`。
+
+### 通过 CLI 管理映射插件
+
+查看映射插件列表
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
+```
+
+从 git 安装映射插件
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
+```
+
+启用或禁用映射插件
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins enable --endpoint http://127.0.0.1:7878 --id example.http.plugin
+bun apps/cli/src/index.ts mapping-plugins disable --endpoint http://127.0.0.1:7878 --id example.http.plugin
+```
+
+卸载映射插件
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id example.http.plugin
+```
+
+重载映射插件构建
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
+```
+
+`reload` 会重新生成托管映射脚本并重建扩展产物。
+
+建议使用 `.opencarapace/skills/playwrong-plugin-authoring` 作为映射插件编写与验证流程的统一指导。
+
+兼容说明
+
+- 仍支持旧的 `/plugins` 路由，便于平滑迁移。
 
 ### 协议模型
 

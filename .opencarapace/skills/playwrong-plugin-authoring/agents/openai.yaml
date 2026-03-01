@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwrong Mapping Plugin Authoring"
+  short_description: "Build stable Playwrong mapping plugins with CLI-managed lifecycle"
+  default_prompt: "Create or update a Playwrong mapping plugin pack and verify it with mapping-plugins commands plus pull/apply/call runtime evidence."

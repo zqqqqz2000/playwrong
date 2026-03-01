@@ -1,27 +1,4 @@
 {
   "version": 1,
-  "plugins": [
-    {
-      "pluginId": "example.github.repo-manager",
-      "name": "GitHub Repository Manager",
-      "version": "0.1.0",
-      "entry": "src/index.ts",
-      "match": {
-        "hosts": [
-          "github.com",
-          "www.github.com"
-        ]
-      },
-      "skillPath": "SKILL.md",
-      "enabled": true,
-      "source": {
-        "type": "git",
-        "repoUrl": "/Users/zzzz/Documents/Playwrong/tmp/plugin-repos/github-repo-manager-1772347654"
-      },
-      "installedAt": "2026-03-01T06:30:19.651Z",
-      "updatedAt": "2026-03-01T06:47:42.723Z",
-      "dirName": "example.github.repo-manager",
-      "description": "Expose GitHub new repository flow as semantic nodes and page calls."
-    }
-  ]
+  "plugins": []
 }

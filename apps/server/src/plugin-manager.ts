@@ -186,6 +186,7 @@ function validateVersion(version: string): void {
   }
 }
 
+// PluginManager manages mapping plugins that convert site pages into semantic XML for LLM workflows.
 export class PluginManager {
   private readonly workspaceRoot: string;
   private readonly pluginsRootDir: string;

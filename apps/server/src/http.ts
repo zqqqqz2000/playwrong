@@ -63,6 +63,10 @@ function mapWsUrlToPageType(url: string | undefined): string {
   }
 }
 
+function isMappingPluginRoute(pathname: string, suffix = ""): boolean {
+  return pathname === `/plugins${suffix}` || pathname === `/mapping-plugins${suffix}`;
+}
+
 export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}): {
   server: ReturnType<typeof Bun.serve>;
   core: BridgeCore;
@@ -109,12 +113,12 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { pages });
         }
 
-        if (request.method === "GET" && url.pathname === "/plugins") {
+        if (request.method === "GET" && isMappingPluginRoute(url.pathname)) {
           const plugins = await pluginManager.listPlugins();
           return json(200, { plugins });
         }
 
-        if (request.method === "POST" && url.pathname === "/plugins/install") {
+        if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/install")) {
           const payload = await readJson<InstallPluginRequest>(request);
           if (!payload.repoUrl) {
             throw new BridgeError("INVALID_REQUEST", "repoUrl is required", {
@@ -125,7 +129,7 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { plugin });
         }
 
-        if (request.method === "POST" && url.pathname === "/plugins/set-enabled") {
+        if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/set-enabled")) {
           const payload = await readJson<SetPluginEnabledRequest>(request);
           if (!payload.pluginId || typeof payload.enabled !== "boolean") {
             throw new BridgeError("INVALID_REQUEST", "pluginId and enabled are required", {
@@ -136,7 +140,7 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { plugin });
         }
 
-        if (request.method === "POST" && url.pathname === "/plugins/uninstall") {
+        if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/uninstall")) {
           const payload = await readJson<UninstallPluginRequest>(request);
           if (!payload.pluginId) {
             throw new BridgeError("INVALID_REQUEST", "pluginId is required", {
@@ -147,12 +151,15 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { ok: true, pluginId: payload.pluginId });
         }
 
-        if (request.method === "POST" && url.pathname === "/plugins/generate") {
+        if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/generate")) {
           const generated = await pluginManager.generateManagedPluginsFile();
           return json(200, { generated });
         }
 
-        if (request.method === "POST" && url.pathname === "/plugins/apply") {
+        if (
+          request.method === "POST" &&
+          (isMappingPluginRoute(url.pathname, "/apply") || isMappingPluginRoute(url.pathname, "/reload"))
+        ) {
           const output = await pluginManager.applyPluginsToExtensionBuild();
           return json(200, output);
         }

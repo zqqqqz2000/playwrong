@@ -57,6 +57,24 @@ function getFlag(flags: FlagMap, key: string, fallback?: string): string {
   throw new Error(`Missing required flag --${key}`);
 }
 
+function getOptionalBooleanFlag(flags: FlagMap, key: string): boolean | undefined {
+  const value = flags[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true) {
+    return true;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  throw new Error(`Invalid boolean flag --${key}: ${String(value)}`);
+}
+
 async function writeText(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
@@ -251,12 +269,90 @@ async function cmdCall(flags: FlagMap): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+function parseSubcommand(args: string[]): { subcommand: string; flags: FlagMap } {
+  const first = args[0];
+  if (!first || first.startsWith("--")) {
+    throw new Error(
+      "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]"
+    );
+  }
+  return {
+    subcommand: first,
+    flags: parseFlags(args.slice(1))
+  };
+}
+
+async function cmdMappingPlugins(args: string[]): Promise<void> {
+  const { subcommand, flags } = parseSubcommand(args);
+  const endpoint = getFlag(flags, "endpoint", DEFAULT_ENDPOINT);
+
+  if (subcommand === "list" || subcommand === "ls") {
+    const result = await getJson<{ plugins: unknown[] }>(endpoint, "/mapping-plugins");
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (subcommand === "install" || subcommand === "add") {
+    const repoUrl = getFlag(flags, "repo-url");
+    const ref = flags.ref && typeof flags.ref === "string" ? flags.ref : undefined;
+    const enabled = getOptionalBooleanFlag(flags, "enabled");
+    const payload: { repoUrl: string; ref?: string; enabled?: boolean } = { repoUrl };
+    if (ref) {
+      payload.ref = ref;
+    }
+    if (enabled !== undefined) {
+      payload.enabled = enabled;
+    }
+    const result = await postJson<{ plugin: unknown }>(endpoint, "/mapping-plugins/install", payload);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (subcommand === "enable" || subcommand === "disable") {
+    const pluginId = getFlag(flags, "id");
+    const result = await postJson<{ plugin: unknown }>(endpoint, "/mapping-plugins/set-enabled", {
+      pluginId,
+      enabled: subcommand === "enable"
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (subcommand === "uninstall" || subcommand === "remove" || subcommand === "delete") {
+    const pluginId = getFlag(flags, "id");
+    const result = await postJson<{ ok: boolean; pluginId: string }>(endpoint, "/mapping-plugins/uninstall", {
+      pluginId
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (subcommand === "generate") {
+    const result = await postJson<{ generated: unknown }>(endpoint, "/mapping-plugins/generate", {});
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (subcommand === "apply" || subcommand === "reload") {
+    const result = await postJson<Record<string, unknown>>(endpoint, "/mapping-plugins/reload", {});
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  throw new Error(
+    `Unknown mapping-plugins subcommand: ${subcommand}. Use list|install|enable|disable|uninstall|generate|apply|reload`
+  );
+}
+
 async function main(): Promise<void> {
   const [, , command, ...rest] = Bun.argv;
   const flags = parseFlags(rest);
 
   if (!command) {
-    console.log("Usage: bridge <serve|pages|pages-remote|sync|sync-all|pull|apply|call> [flags]");
+    console.log("Usage: bridge <serve|pages|pages-remote|sync|sync-all|pull|apply|call|mapping-plugins> [flags]");
+    console.log(
+      "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]"
+    );
     process.exit(1);
   }
 
@@ -290,6 +386,10 @@ async function main(): Promise<void> {
   }
   if (command === "call") {
     await cmdCall(flags);
+    return;
+  }
+  if (command === "mapping-plugins" || command === "plugins") {
+    await cmdMappingPlugins(rest);
     return;
   }
 

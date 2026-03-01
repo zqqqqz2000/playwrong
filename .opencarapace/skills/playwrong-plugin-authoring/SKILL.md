@@ -1,16 +1,16 @@
 ---
 name: playwrong-plugin-authoring
-description: Create or update Playwrong site plugins with minimal exploration. Use when Codex needs to add a new plugin pack (manifest, skill doc, script implementation, registration, and validation tests) that maps a real page to semantic nodes and pull/apply/call actions.
+description: Create or update Playwrong mapping plugins with minimal exploration. Use when Codex needs to add a plugin pack that maps real pages to LLM-readable XML and verifies runtime behavior through mapping-plugins management commands and pull/apply/call evidence.
 ---
 
-# Playwrong Plugin Authoring
+# Playwrong Mapping Plugin Authoring
 
-Use this workflow to build stable site plugins.
+Use this workflow to build stable mapping plugins.
 
 ## When To Use
 
-- User asks to add a new site/page plugin.
-- Existing plugin is unstable and needs selector hardening.
+- User asks to add a new site/page mapping plugin.
+- Existing mapping plugin is unstable and needs selector hardening.
 - Need plugin-level tests and manifest/skill compliance.
 
 ## Required Inputs
@@ -18,6 +18,22 @@ Use this workflow to build stable site plugins.
 - Target site and page scope (`hosts` + `paths`).
 - Key user goals (what LLM must do via `pull/apply/call`).
 - At least 1 success criterion and 1 failure criterion.
+
+## Mapping Plugin CLI Commands
+
+Use this command set as the default lifecycle for mapping plugin management.
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
+bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
+bun apps/cli/src/index.ts mapping-plugins enable --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
+bun apps/cli/src/index.ts mapping-plugins disable --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
+bun apps/cli/src/index.ts mapping-plugins generate --endpoint http://127.0.0.1:7878
+bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
+bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
+```
+
+`reload` regenerates managed mapping scripts and rebuilds extension artifacts.
 
 ## Output Contract
 
@@ -32,7 +48,7 @@ For each new plugin, always create or update these files:
 ## Implementation Flow
 
 1. Define manifest and scope first.
-- Follow [`plugins/PLUGIN_SPEC.md`](../../plugins/PLUGIN_SPEC.md).
+- Follow [`plugins/PLUGIN_SPEC.md`](../../../plugins/PLUGIN_SPEC.md).
 - Keep `pluginId` lowercase and `version` semver-style.
 
 2. Implement `extract` first.
@@ -59,6 +75,7 @@ For each new plugin, always create or update these files:
 - Confirm logs include `/sync/page`, `/pull`, `/apply` or `/call`.
 - Confirm page type and key node ids after sync.
 - Confirm `pull` artifacts include local screenshot output at `.bridge/pages/<pageId>/screenshot.png` when extension is connected.
+- Confirm mapping plugin lifecycle is operable through `mapping-plugins` commands.
 
 ## Definition Of Done
 
@@ -66,6 +83,7 @@ For each new plugin, always create or update these files:
 - Skill doc includes `Usage`, `Operations`, `Failure Modes`.
 - `sync/page` returns expected `pageType` + key ids.
 - Action succeeds without direct CDP/Playwright DOM scripting.
+- `mapping-plugins install|enable|reload|uninstall` path is verified for the target plugin.
 
 ## References
 

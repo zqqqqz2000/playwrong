@@ -1,4 +1,0 @@
-interface:
-  display_name: "Playwrong Plugin Authoring"
-  short_description: "Build stable Playwrong site plugins with minimal exploration"
-  default_prompt: "Create or update a Playwrong plugin pack (manifest, skill, script, tests) and verify it via pull/apply/call runtime evidence."

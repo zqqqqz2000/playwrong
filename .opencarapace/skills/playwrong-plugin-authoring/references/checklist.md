@@ -1,5 +1,13 @@
 # Plugin Authoring Checklist
 
+## Mapping Plugin CLI Path
+
+- Verify `mapping-plugins list` can discover plugin state.
+- Verify `mapping-plugins install` installs from git and updates registry.
+- Verify `mapping-plugins enable` and `mapping-plugins disable` toggle enabled status.
+- Verify `mapping-plugins reload` regenerates managed scripts and rebuilds extension artifacts.
+- Verify `mapping-plugins uninstall` removes plugin directory and registry entry.
+
 ## Selector Robustness
 
 - Prefer semantic attributes over brittle index-based selectors.

@@ -121,7 +121,7 @@ async function requestJson<T>(baseUrl: string, path: string, method: "GET" | "PO
 }
 
 describe("Plugin manager HTTP routes", () => {
-  it("supports install/list/toggle/uninstall", async () => {
+  it("supports mapping plugin install/list/toggle/uninstall", async () => {
     const workspace = await createWorkspace();
     const repo = await createGitPluginRepo(workspace);
 
@@ -138,12 +138,12 @@ describe("Plugin manager HTTP routes", () => {
     servers.push(started.server);
     const baseUrl = started.server.url.toString();
 
-    const initial = await requestJson<{ plugins: unknown[] }>(baseUrl, "/plugins", "GET");
+    const initial = await requestJson<{ plugins: unknown[] }>(baseUrl, "/mapping-plugins", "GET");
     expect(initial.plugins).toHaveLength(0);
 
     const installResult = await requestJson<{ plugin: { pluginId: string; enabled: boolean } }>(
       baseUrl,
-      "/plugins/install",
+      "/mapping-plugins/install",
       "POST",
       { repoUrl: repo, enabled: true }
     );
@@ -152,14 +152,17 @@ describe("Plugin manager HTTP routes", () => {
 
     const listResult = await requestJson<{ plugins: Array<{ pluginId: string; enabled: boolean }> }>(
       baseUrl,
-      "/plugins",
+      "/mapping-plugins",
       "GET"
     );
     expect(listResult.plugins).toHaveLength(1);
 
+    const backwardCompatibleList = await requestJson<{ plugins: Array<{ pluginId: string }> }>(baseUrl, "/plugins", "GET");
+    expect(backwardCompatibleList.plugins).toHaveLength(1);
+
     const toggleResult = await requestJson<{ plugin: { enabled: boolean } }>(
       baseUrl,
-      "/plugins/set-enabled",
+      "/mapping-plugins/set-enabled",
       "POST",
       { pluginId: "example.http.plugin", enabled: false }
     );
@@ -167,18 +170,18 @@ describe("Plugin manager HTTP routes", () => {
 
     const generateResult = await requestJson<{ generated: { enabledCount: number } }>(
       baseUrl,
-      "/plugins/generate",
+      "/mapping-plugins/generate",
       "POST",
       {}
     );
     expect(generateResult.generated.enabledCount).toBe(0);
 
-    const uninstallResult = await requestJson<{ ok: boolean }>(baseUrl, "/plugins/uninstall", "POST", {
+    const uninstallResult = await requestJson<{ ok: boolean }>(baseUrl, "/mapping-plugins/uninstall", "POST", {
       pluginId: "example.http.plugin"
     });
     expect(uninstallResult.ok).toBe(true);
 
-    const afterUninstall = await requestJson<{ plugins: unknown[] }>(baseUrl, "/plugins", "GET");
+    const afterUninstall = await requestJson<{ plugins: unknown[] }>(baseUrl, "/mapping-plugins", "GET");
     expect(afterUninstall.plugins).toHaveLength(0);
   });
 });
