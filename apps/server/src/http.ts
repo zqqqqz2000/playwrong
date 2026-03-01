@@ -224,7 +224,18 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
 
         if (request.method === "POST" && url.pathname === "/pull") {
           const payload = await readJson<PullRequest>(request);
-          return json(200, core.pull(payload));
+          const response = core.pull(payload);
+          if (extensionGateway.isConnected()) {
+            try {
+              const screenshot = await extensionGateway.captureScreenshot(payload.pageId);
+              if (screenshot) {
+                response.screenshot = screenshot;
+              }
+            } catch {
+              // screenshot is best effort and must not break pull
+            }
+          }
+          return json(200, response);
         }
 
         if (request.method === "POST" && url.pathname === "/apply") {

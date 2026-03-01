@@ -31,13 +31,25 @@ export interface RemoteCallParams {
   args?: Record<string, unknown>;
 }
 
-export type ExtensionRpcMethod = "pages.list" | "page.extract" | "page.setValue" | "page.call";
+export interface RemoteScreenshotResult {
+  mimeType: string;
+  encoding: "base64";
+  data: string;
+}
+
+export type ExtensionRpcMethod =
+  | "pages.list"
+  | "page.extract"
+  | "page.setValue"
+  | "page.call"
+  | "page.screenshot";
 
 export type ExtensionRpcParamsByMethod = {
   "pages.list": Record<string, never>;
   "page.extract": { pageId: string };
   "page.setValue": RemoteSetValueParams;
   "page.call": RemoteCallParams;
+  "page.screenshot": { pageId: string };
 };
 
 export type ExtensionRpcResultByMethod = {
@@ -45,6 +57,7 @@ export type ExtensionRpcResultByMethod = {
   "page.extract": RemoteExtractResult;
   "page.setValue": { ok: true };
   "page.call": { output?: unknown };
+  "page.screenshot": RemoteScreenshotResult;
 };
 
 export interface ExtensionRpcRequest<

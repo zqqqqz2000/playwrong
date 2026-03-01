@@ -82,6 +82,8 @@ bun apps/cli/src/index.ts sync --endpoint http://127.0.0.1:7878 --page tab:12345
 bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
 ```
 
+`pull` now writes XML, editable files, and a default screenshot at `.bridge/pages/tab:123456/screenshot.png`.
+
 Apply local editable updates
 
 ```bash
@@ -328,6 +330,8 @@ bun apps/cli/src/index.ts pages-remote --endpoint http://127.0.0.1:7878
 bun apps/cli/src/index.ts sync --endpoint http://127.0.0.1:7878 --page tab:123456
 bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
 ```
+
+`pull` 现在会落盘 XML、editable 文件，以及默认截图 `.bridge/pages/tab:123456/screenshot.png`。
 
 修改后回写页面
 

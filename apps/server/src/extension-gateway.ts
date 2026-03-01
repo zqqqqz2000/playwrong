@@ -139,6 +139,17 @@ export class ExtensionGateway implements ExecutionBridge {
     return result;
   }
 
+  async captureScreenshot(pageId: string): Promise<ExtensionRpcResultByMethod["page.screenshot"] | null> {
+    if (!this.socket) {
+      return null;
+    }
+    const result = await this.request("page.screenshot", { pageId });
+    if (!result || typeof result !== "object") {
+      throw new BridgeError("ACTION_FAIL", "Invalid page.screenshot response");
+    }
+    return result as ExtensionRpcResultByMethod["page.screenshot"];
+  }
+
   private async request<M extends ExtensionRpcMethod>(
     method: M,
     params: ExtensionRpcParamsByMethod[M]

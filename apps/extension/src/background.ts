@@ -201,6 +201,58 @@ async function callRemoteFunction(
   return response.result;
 }
 
+function parseBase64DataUrl(dataUrl: string): { mimeType: string; data: string } {
+  const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
+  if (!match) {
+    throw new RpcHandledError("ACTION_FAIL", "Invalid screenshot payload");
+  }
+  return {
+    mimeType: match[1] || "image/png",
+    data: match[2] || ""
+  };
+}
+
+async function captureRemotePageScreenshot(pageId: string): Promise<ExtensionRpcResultByMethod["page.screenshot"]> {
+  const tabId = parsePageId(pageId);
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    throw new RpcHandledError("NOT_FOUND", `Tab not found for pageId: ${pageId}`);
+  }
+
+  const windowId = tab.windowId;
+  if (windowId === undefined) {
+    throw new RpcHandledError("ACTION_FAIL", `Cannot resolve window for pageId: ${pageId}`);
+  }
+
+  const activeTabs = await chrome.tabs.query({ windowId, active: true });
+  const prevActiveTabId = activeTabs[0]?.id;
+  const switched = tab.active !== true;
+
+  try {
+    if (switched) {
+      await chrome.tabs.update(tabId, { active: true });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+    const parsed = parseBase64DataUrl(dataUrl);
+    return {
+      mimeType: parsed.mimeType,
+      encoding: "base64",
+      data: parsed.data
+    };
+  } finally {
+    if (switched && prevActiveTabId !== undefined && prevActiveTabId !== tabId) {
+      try {
+        await chrome.tabs.update(prevActiveTabId, { active: true });
+      } catch {
+        // best effort restore
+      }
+    }
+  }
+}
+
 async function handleRpcRequest<M extends ExtensionRpcMethod>(
   method: M,
   params: ExtensionRpcRequest<M>["params"]
@@ -216,6 +268,9 @@ async function handleRpcRequest<M extends ExtensionRpcMethod>(
   }
   if (method === "page.call") {
     return (await callRemoteFunction(params as ExtensionRpcRequest<"page.call">["params"])) as ExtensionRpcResultByMethod[M];
+  }
+  if (method === "page.screenshot") {
+    return (await captureRemotePageScreenshot((params as { pageId: string }).pageId)) as ExtensionRpcResultByMethod[M];
   }
   throw new RpcHandledError("INVALID_REQUEST", `Unsupported RPC method: ${String(method)}`);
 }

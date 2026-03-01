@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -130,6 +131,15 @@ function pickRemotePage(remotePages: RemotePageInfo[]): RemotePageInfo | null {
   );
 }
 
+async function writePullScreenshot(outDir: string, name: string, pull: PullResponse): Promise<void> {
+  if (!pull.screenshot || pull.screenshot.encoding !== "base64" || pull.screenshot.data.length === 0) {
+    return;
+  }
+  const ext = pull.screenshot.mimeType === "image/jpeg" ? "jpg" : "png";
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(outDir, `${name}.${ext}`), Buffer.from(pull.screenshot.data, "base64"));
+}
+
 async function syncPageWithRetry(endpoint: string, pageId: string): Promise<SyncResponse> {
   let lastError: unknown = null;
   for (let i = 0; i < 8; i += 1) {
@@ -207,6 +217,7 @@ async function main(): Promise<void> {
   }
 
   const pull = await postJson<PullResponse>(endpoint, "/pull", { pageId });
+  await writePullScreenshot(outDir, "screenshot-before-search", pull);
   const queryFile = pull.files.find((file) => file.id === "search.query");
   if (!queryFile) {
     throw new Error("search.query node is missing");
@@ -241,6 +252,7 @@ async function main(): Promise<void> {
   const pullAfter = await postJson<PullResponse>(endpoint, "/pull", { pageId });
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, "state-after-search.xml"), pullAfter.xml, "utf8");
+  await writePullScreenshot(outDir, "screenshot-after-search", pullAfter);
 
   console.log(`FASTPATH_RESULT_IDS=${waited.resultActionIds.join(",")}`);
   console.log(`FASTPATH_NEXT_ACTION=${waited.nextActionId}`);

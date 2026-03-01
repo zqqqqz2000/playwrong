@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { Buffer } from "node:buffer";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { startBridgeHttpServer } from "@playwrong/server";
@@ -17,6 +18,10 @@ interface PullIndex {
   pageId: string;
   rev: number;
   files: Array<Pick<PullFile, "id" | "kind" | "path">>;
+  screenshot?: {
+    path: string;
+    mimeType: string;
+  };
 }
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:7878";
@@ -55,6 +60,11 @@ function getFlag(flags: FlagMap, key: string, fallback?: string): string {
 async function writeText(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
+}
+
+async function writeBytes(path: string, content: Uint8Array): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
 }
 
 async function writeJson(path: string, data: unknown): Promise<void> {
@@ -134,14 +144,40 @@ async function cmdPull(flags: FlagMap): Promise<void> {
     await writeText(join(stateDir, file.path), file.content);
   }
 
+  let screenshot: PullIndex["screenshot"] | undefined;
+  if (data.screenshot && data.screenshot.encoding === "base64" && data.screenshot.data.length > 0) {
+    const ext = data.screenshot.mimeType === "image/jpeg" ? "jpg" : "png";
+    const relativePath = join("pages", pageId, `screenshot.${ext}`);
+    await writeBytes(join(stateDir, relativePath), Buffer.from(data.screenshot.data, "base64"));
+    screenshot = {
+      path: relativePath,
+      mimeType: data.screenshot.mimeType
+    };
+  }
+
   const index: PullIndex = {
     pageId,
     rev: data.rev,
     files: data.files.map((f) => ({ id: f.id, kind: f.kind, path: f.path }))
   };
+  if (screenshot) {
+    index.screenshot = screenshot;
+  }
 
   await writeJson(join(stateDir, "pages", pageId, "index.json"), index);
-  console.log(JSON.stringify({ ok: true, pageId, rev: data.rev, files: data.files.length }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        pageId,
+        rev: data.rev,
+        files: data.files.length,
+        screenshotPath: screenshot?.path
+      },
+      null,
+      2
+    )
+  );
 }
 
 function parseFileValue(kind: PullFile["kind"], raw: string): string | boolean | string[] {

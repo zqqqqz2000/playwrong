@@ -93,11 +93,18 @@ export interface PullRequest {
   pageId: string;
 }
 
+export interface PullScreenshot {
+  mimeType: string;
+  encoding: "base64";
+  data: string;
+}
+
 export interface PullResponse {
   pageId: string;
   rev: number;
   xml: string;
   files: PullFile[];
+  screenshot?: PullScreenshot;
 }
 
 export interface ApplyEdit {

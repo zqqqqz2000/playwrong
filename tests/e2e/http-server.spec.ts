@@ -7,6 +7,7 @@ import type {
   RemoteCallParams,
   RemoteExtractResult,
   RemotePageInfo,
+  RemoteScreenshotResult,
   RemoteSetValueParams
 } from "../../packages/protocol/src/index";
 
@@ -61,6 +62,14 @@ class FakeExtensionGateway extends ExtensionGateway {
     this.callOps.push(input);
     return { done: true };
   }
+
+  override async captureScreenshot(_pageId: string): Promise<RemoteScreenshotResult | null> {
+    return {
+      mimeType: "image/png",
+      encoding: "base64",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    };
+  }
 }
 
 const servers: Array<ReturnType<typeof startBridgeHttpServer>["server"]> = [];
@@ -107,6 +116,7 @@ describe("HTTP server with extension gateway", () => {
     const pull = await postJson<PullResponse>(baseUrl, "/pull", { pageId: "tab:1" });
     expect(pull.rev).toBe(1);
     expect(pull.xml).toContain("login.email");
+    expect(pull.screenshot?.mimeType).toBe("image/png");
 
     const applyPayload: ApplyRequest = {
       pageId: "tab:1",

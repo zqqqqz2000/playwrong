@@ -58,6 +58,7 @@ For each new plugin, always create or update these files:
 6. Verify runtime path.
 - Confirm logs include `/sync/page`, `/pull`, `/apply` or `/call`.
 - Confirm page type and key node ids after sync.
+- Confirm `pull` artifacts include local screenshot output at `.bridge/pages/<pageId>/screenshot.png` when extension is connected.
 
 ## Definition Of Done
 

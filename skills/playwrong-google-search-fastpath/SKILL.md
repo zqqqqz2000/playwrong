@@ -26,6 +26,7 @@ bun skills/playwrong-google-search-fastpath/scripts/google_search_fastpath.ts \
 - `FASTPATH_PAGE_TYPE=google.search`
 - `FASTPATH_RESULT_IDS=...search.result.N.open...`
 - `FASTPATH_NEXT_ACTION=search.pagination.next`
+- When using CLI `pull`, default output now also includes one screenshot saved at `.bridge/pages/<PAGE_ID>/screenshot.png`.
 
 4. Return a short JSON result.
 - Include whether abstraction was used.
