@@ -138,6 +138,9 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 仓库内提供了两个示例：
 - `plugins/examples/wikipedia-search`
 - `plugins/examples/hackernews-reader`
+- `plugins/examples/github-repo-manager`
+
+其中 `github-repo-manager` 已默认接入扩展本地脚本（`apps/extension/src/user-scripts/index.ts`），扩展构建后可直接用于 GitHub 仓库创建流程。
 
 ### 4. 安装与启用插件（UI）
 

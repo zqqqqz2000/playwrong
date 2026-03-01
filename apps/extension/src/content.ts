@@ -48,6 +48,18 @@ const MAX_STABILITY_HISTORY = 60;
 let pendingRequests = 0;
 const mutationTimestamps: number[] = [];
 
+function wakeBackgroundSocket(): void {
+  try {
+    chrome.runtime.sendMessage({ type: "playwrong.wakeup" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch {
+    // best-effort wakeup only
+  }
+}
+
+wakeBackgroundSocket();
+
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }

@@ -77,3 +77,4 @@ description: explain when and how to use this plugin
 
 - `plugins/examples/wikipedia-search`
 - `plugins/examples/hackernews-reader`
+- `plugins/examples/github-repo-manager`

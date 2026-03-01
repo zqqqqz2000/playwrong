@@ -1,5 +1,6 @@
 import type { PluginScript } from "@playwrong/plugin-sdk";
 import { managedPluginScripts } from "./managed-plugins.generated";
+import { githubRepoManagerPluginScripts } from "./examples/github-repo-manager";
 
 export interface UserSimpleStabilityRule {
   ruleId: string;
@@ -29,6 +30,7 @@ export const userSimpleStabilityRules: UserSimpleStabilityRule[] = [
 
 // User-defined TS plugin scripts with optional `isStable` judge.
 export const localUserPluginScripts: PluginScript[] = [
+  ...githubRepoManagerPluginScripts,
   // Example:
   // {
   //   scriptId: "user.google.stable-judge",

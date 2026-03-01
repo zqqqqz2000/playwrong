@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "example.github.repo-manager",
+  "name": "GitHub Repository Manager",
+  "version": "0.1.0",
+  "description": "Expose GitHub new repository flow as semantic nodes and page calls.",
+  "entry": "src/index.ts",
+  "skill": {
+    "path": "SKILL.md"
+  },
+  "match": {
+    "hosts": ["github.com", "www.github.com"]
+  }
+}

@@ -60,11 +60,8 @@ function toRpcError(error: unknown): ExtensionRpcError {
 }
 
 async function getServerWsUrl(): Promise<string> {
-  const fromStorage = await chrome.storage.local.get(STORAGE_SERVER_WS_URL_KEY);
-  const maybeUrl = fromStorage[STORAGE_SERVER_WS_URL_KEY];
-  if (typeof maybeUrl === "string" && maybeUrl.length > 0) {
-    return maybeUrl;
-  }
+  // Keep runtime connection deterministic for local bridge runs.
+  // Popup can still update storage, but background always dials the default local endpoint.
   return DEFAULT_SERVER_WS_URL;
 }
 
@@ -328,6 +325,27 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   } else {
     scheduleReconnect();
   }
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const type = (message as { type?: unknown }).type;
+  if (type !== "playwrong.wakeup") {
+    return;
+  }
+  void connectSocket()
+    .then(() => {
+      sendResponse({ ok: true });
+    })
+    .catch((error: unknown) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  return true;
 });
 
 void connectSocket();
