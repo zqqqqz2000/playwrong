@@ -1,234 +1,171 @@
 # Playwrong
 
-把浏览器网页抽象成 LLM 可读/可操作的 XML，并通过统一协议 `pull / apply / call` 完成交互。
+Playwrong is a production-focused browser automation bridge for LLM systems.  
+It converts live web pages into structured XML and executes interaction through one unified contract: `pull`, `apply`, `call`.
 
-## 快速使用（先跑通）
+## English Guide
 
-### 1. 环境准备
-- Bun 1.3+
-- Chromium/Chrome（E2E 会自动拉起）
-- macOS/Linux（当前脚本主要在这两者验证）
+### Overview
+
+Playwrong provides a stable abstraction layer between web pages and language models.
+
+- XML snapshot generation for live browser state
+- Editable field extraction for deterministic text updates
+- Function-level actions for page and element operations
+- Plugin-driven site specialization for domain workflows
+- CLI and extension runtime for local or integrated operation
+
+### Architecture
+
+- `apps/cli` exposes command workflows such as serve, sync, pull, apply, call
+- `apps/server` provides HTTP and WebSocket gateway services
+- `apps/extension` runs Chrome MV3 scripts and bridge communication
+- `packages/protocol` defines protocol types, XML rendering, and error model
+- `packages/plugin-sdk` provides matcher, locator, and plugin interfaces
+- `plugins` stores specification, examples, installed plugins, and registry state
+- `skills` contains Codex workflow skills for fast path automation and plugin authoring
+
+### Quick Start
+
+Requirements
+
+- Bun version 1.3 or newer
+- Chromium or Chrome
+- macOS or Linux
+
+Install dependencies
 
 ```bash
 bun install
 ```
 
-### 2. 一键跑通（推荐先跑）
+Run the main end to end suites
 
-#### 框架主链路 E2E（扩展 + server + 协议）
 ```bash
 bun run test:e2e:browser-google
-```
-
-#### Codex CLI + Skill 快路径 E2E
-```bash
 bun run test:e2e:codex-google
 ```
 
-#### 真实 Google（严格模式，不跳过）
+Run strict real Google suites
+
 ```bash
 bun run test:e2e:browser-google:real
 bun run test:e2e:codex-google:real
 ```
 
-> 这四条命令会验证：输入关键词、触发搜索、提取结果列表、翻页节点存在，以及 `google.search` 抽象生效。
+### Manual Workflow
 
----
+Build extension
 
-## 手动联调（CLI + Chrome 扩展）
-
-### 1. 构建扩展
 ```bash
 bun run --cwd apps/extension build
 ```
-产物目录：`apps/extension/dist`
 
-### 2. 在 Chrome 加载扩展
-1. 打开 `chrome://extensions`
-2. 开启开发者模式
-3. 选择“加载已解压的扩展程序”
-4. 选择目录 `apps/extension/dist`
+Load extension from `apps/extension/dist` in Chrome extension page with developer mode enabled.
 
-### 3. 启动服务（CLI 启 server）
+Start server
+
 ```bash
 bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
 ```
 
-插件管理 UI（在 Chrome 扩展内）：
-- 点击浏览器工具栏中的 `Playwrong Bridge` 扩展图标打开 popup
-- 在 popup 内可配置 server endpoint、从 git 安装插件、启用/禁用、卸载、生成与构建
-- popup 会显示连接状态（`Server Offline` / `Server Up / Extension Disconnected` / `Bridge Connected`）
+List remote pages
 
-### 4. 查看扩展侧页面
 ```bash
 bun apps/cli/src/index.ts pages-remote --endpoint http://127.0.0.1:7878
 ```
-拿到 `pageId`（通常形如 `tab:123456`）。
 
-### 5. 同步并拉取 XML + editable 文件
+Sync and pull state
+
 ```bash
 bun apps/cli/src/index.ts sync --endpoint http://127.0.0.1:7878 --page tab:123456
 bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
 ```
 
-此时会生成：
-- XML：`.bridge/pages/tab:123456/state.xml`
-- 可编辑文件：`.bridge/pages/tab:123456/editable/*.txt`
-- 索引：`.bridge/pages/tab:123456/index.json`
+Apply local editable updates
 
-### 6. 修改 editable 后回写页面
 ```bash
-# 例如修改搜索框
 printf 'playwrong llm automation\n' > .bridge/pages/tab:123456/editable/search.query.txt
-
 bun apps/cli/src/index.ts apply --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
 ```
 
-### 7. 调用动作 / 函数
+Invoke page function
+
 ```bash
 bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:123456 --id page --fn search --args '{"query":"playwrong llm automation"}'
 ```
 
----
+### Plugin Framework
 
-## 插件系统（写法 + 使用）
+Plugin repository must include `playwrong.plugin.json` at root.
 
-### 1. 插件包规约
+Required manifest fields
 
-每个插件仓库根目录必须包含 `playwrong.plugin.json`：
+- `schemaVersion` protocol schema version
+- `pluginId` unique plugin id
+- `name` display name
+- `version` semantic version
+- `entry` relative TypeScript entry path
+- `skill.path` relative skill document path
+- `match.hosts` host matching rule
+- `match.paths` path matching rule
 
-```json
-{
-  "schemaVersion": 1,
-  "pluginId": "example.wikipedia.search",
-  "name": "Wikipedia Search Helper",
-  "version": "0.1.0",
-  "entry": "src/index.ts",
-  "skill": {
-    "path": "SKILL.md"
-  },
-  "match": {
-    "hosts": ["*.wikipedia.org"],
-    "paths": ["/wiki/*", "/w/index.php"]
-  }
-}
-```
+Skill document pointed by `skill.path` must include the following sections.
 
-关键字段：
-- `pluginId`：唯一标识
-- `entry`：插件入口 TS 文件（相对路径）
-- `skill.path`：插件 skill 文档（相对路径，必填）
-- `match`：插件生效网站范围（至少 `hosts` 或 `paths` 之一）
+- `Usage`
+- `Operations` or `Functions`
+- `Failure Modes`
 
-`skill.path` 指向的文档必须包含：
-- `## Usage`：怎么使用这个插件
-- `## Operations` 或 `## Functions`：可用操作/函数列表
-- `## Failure Modes`：常见失败与恢复动作
+Export contract in plugin entry
 
-完整规范见：`plugins/PLUGIN_SPEC.md`
+- `export const pluginScripts`
+- `export default`
 
-### 2. 插件入口导出约定
+If current page is unsupported, throw `new Error` with value `PLUGIN_MISS`.
 
-`entry` 文件导出以下之一：
-- `export const pluginScripts: PluginScript[] = [...]`
-- `export default PluginScript[]`
-
-插件无法处理当前页面/动作时，请抛出 `new Error("PLUGIN_MISS")`。
-
-### 3. 写插件示例
-
-仓库内提供了两个示例：
-- `plugins/examples/wikipedia-search`
-- `plugins/examples/hackernews-reader`
-- `plugins/examples/github-repo-manager`
-
-其中 `github-repo-manager` 已默认接入扩展本地脚本（`apps/extension/src/user-scripts/index.ts`），扩展构建后可直接用于 GitHub 仓库创建流程。
-
-### 4. 安装与启用插件（UI）
-
-1. 启动服务：`bun apps/cli/src/index.ts serve`
-2. 点击 Chrome 工具栏扩展图标，打开 `Playwrong Bridge` popup
-3. 在 “Install From Git” 填入 git 地址并安装
-4. 在列表中切换启用/禁用
-5. 点击 “Generate + Build Extension”
-6. 在 Chrome 扩展页重新加载 `apps/extension/dist`
-
-说明：
-- 启用状态存储在 `plugins/registry.json`
-- 克隆插件目录在 `plugins/installed/*`
-- 生成文件在 `apps/extension/src/user-scripts/managed-plugins.generated.ts`
-
-### 5. 命令行生成托管插件注册文件
+Generate managed plugin registry
 
 ```bash
 bun run plugins:generate
 ```
 
----
+Specification document: `plugins/PLUGIN_SPEC.md`.
 
-## LLM 交互模型（核心）
+### LLM Interaction Contract
 
-LLM 只需要三类操作：
-1. `pull`：获取当前页面 XML 与 editable 映射。
-2. `apply`：编辑本地文件后批量回写。
-3. `call`：调用节点级或 page 级函数（例如 `click/search/nextPage`）。
+Core operations
 
-冲突策略：
-- `REV_MISMATCH` -> 拒绝本次操作，先重新 `pull` 再重试。
+1. `pull` reads XML snapshot and editable mapping.
+2. `apply` writes local editable changes back to page state.
+3. `call` executes element or page function.
 
----
+Conflict rule
 
-## Codex Skill
+- `REV_MISMATCH` means local state is stale
+- run `pull` again before retry
 
-Skill 目录：
-- `skills/playwrong-google-search-fastpath`（Google 搜索快路径）
-- `skills/playwrong-plugin-authoring`（创建新插件的标准流程）
+### Stability Policy
 
-Google 快路径核心脚本：
-```bash
-bun skills/playwrong-google-search-fastpath/scripts/google_search_fastpath.ts \
-  --endpoint http://127.0.0.1:7878 \
-  --pageId tab:123456 \
-  --query "playwrong llm automation"
-```
+Stability logic is configured in `apps/extension/src/user-scripts/index.ts`.
 
-新增插件时，优先让 LLM 使用 `playwrong-plugin-authoring` skill，按规约落地：
-- `manifest + SKILL + src/index.ts + wiring + tests`
-- 并用 `pull/apply/call` 证据验证插件真的生效
+Available strategy groups
 
-用于判定“确实走了抽象层”的关键日志：
-- `FASTPATH_PAGE_TYPE=google.search`
-- `FASTPATH_RESULT_IDS=search.result.N.open...`
-- `FASTPATH_NEXT_ACTION=search.pagination.next`
+- simple rule configuration with k threshold, timeout, and sampling interval
+- custom `isStable` logic in plugin scripts
 
----
+Default behavior requires continuous success across k samples, plus URL stability, pending request status, and DOM mutation signals.
 
-## 可配置稳定性（waitForStable）
+### Testing
 
-位置：`apps/extension/src/user-scripts/index.ts`
+Type and full test suite
 
-支持两种方式：
-1. 简单规则（k 值/超时/采样间隔等）
-- `userSimpleStabilityRules`
-2. JS/TS 自定义判定
-- `userPluginScripts[].isStable(ctx)`
-
-默认策略是“连续 K 次采样都达标才稳定”，并结合：
-- URL 是否稳定
-- pending requests
-- 最近 DOM mutation 数
-
----
-
-## 测试命令
-
-### 类型检查 + 全量测试
 ```bash
 bun run typecheck
 bun test
 ```
 
-### 重点 E2E
+Key end to end suites
+
 ```bash
 bun run test:e2e:browser-google
 bun run test:e2e:browser-google:real
@@ -237,39 +174,14 @@ bun run test:e2e:codex-google
 bun run test:e2e:codex-google:real
 ```
 
-### 插件管理相关测试
+Plugin management suites
+
 ```bash
 bun test tests/unit/plugin-manager.spec.ts
 bun test tests/e2e/plugin-manager-http.spec.ts
 ```
 
----
-
-## 目录结构
-
-```text
-apps/
-  cli/          # bridge CLI（含 serve/pages/sync/pull/apply/call）
-  server/       # HTTP + WebSocket gateway + snapshot core
-  extension/    # Chrome MV3 扩展（background/content + site scripts）
-plugins/
-  PLUGIN_SPEC.md
-  examples/     # 插件编写示例
-  installed/    # git 安装后的插件（运行时目录）
-packages/
-  protocol/     # 协议类型、错误码、XML 渲染
-  plugin-sdk/   # 匹配器、Locator、插件接口
-skills/
-  playwrong-google-search-fastpath/   # Codex 快路径 skill
-  playwrong-plugin-authoring/         # 新插件编写 skill
-tests/
-  unit/         # 单测
-  e2e/          # 端到端（含 real-google 与 codex-cli）
-```
-
----
-
-## 关键 API（Server）
+### Server API
 
 - `GET /health`
 - `GET /extension/status`
@@ -287,29 +199,255 @@ tests/
 - `POST /plugins/generate`
 - `POST /plugins/apply`
 
+### Repository Layout
+
+```text
+apps/
+  cli/
+  server/
+  extension/
+packages/
+  protocol/
+  plugin-sdk/
+plugins/
+  PLUGIN_SPEC.md
+  examples/
+  installed/
+skills/
+  playwrong-google-search-fastpath/
+  playwrong-plugin-authoring/
+tests/
+  unit/
+  e2e/
+```
+
+### Troubleshooting
+
+`Extension websocket not connected`
+
+- verify extension build is loaded from `apps/extension/dist`
+- refresh target page to ensure content script injection
+
+`Expected pageType=google.search`
+
+- verify current page is Google search context
+- run `pages-remote` and then run `sync`
+
+`REV_MISMATCH`
+
+- local editable files are stale
+- run `pull` and retry
+
+Real Google suite may fail intermittently due to consent pages, anti-bot checks, or region routing changes.
+
+### Documents
+
+- `docs/SPEC.md`
+- `docs/V2.md`
+
 ---
 
-## 常见问题
+## 中文说明
 
-### 1) `Extension websocket not connected`
-- 确认扩展已加载 `apps/extension/dist`
-- 确认页面已刷新，content script 已注入
+### 项目简介
 
-### 2) `Expected pageType=google.search`
-- 当前页不在 Google 搜索场景
-- 先 `pages-remote` 检查 `pageId/url` 再 `sync`
+Playwrong 是面向生产场景的浏览器自动化桥接层。  
+项目将网页状态抽象为结构化 XML，并通过统一协议 `pull`、`apply`、`call` 与 LLM 协同执行交互。
 
-### 3) `REV_MISMATCH`
-- 你的本地 editable 不是最新版本
-- 重新 `pull` 后再 `apply/call`
+### 核心能力
 
-### 4) 真实 Google 偶发失败
-- 可能触发 consent/anti-bot/地区跳转
-- 使用 `:real` 测试时建议独立网络环境重试
+- 生成可读、可对比的页面 XML 快照
+- 提取可编辑字段并支持确定性回写
+- 提供节点级与页面级函数调用模型
+- 支持插件化站点适配与领域流程扩展
+- 提供 CLI 与扩展协同运行模式
 
----
+### 架构组成
 
-## 设计文档
+- `apps/cli` 提供 serve、sync、pull、apply、call 等命令入口
+- `apps/server` 提供 HTTP 与 WebSocket 网关
+- `apps/extension` 负责 Chrome MV3 侧脚本与桥接通信
+- `packages/protocol` 定义协议类型、XML 渲染与错误模型
+- `packages/plugin-sdk` 提供匹配器、定位器与插件接口
+- `plugins` 存放规范、示例、安装目录与注册状态
+- `skills` 存放 Codex 自动化流程能力
 
-- 详细规格：`docs/SPEC.md`
-- V2 规划：`docs/V2.md`
+### 快速开始
+
+环境要求
+
+- Bun 版本 1.3 或更新版本
+- Chromium 或 Chrome
+- macOS 或 Linux
+
+安装依赖
+
+```bash
+bun install
+```
+
+执行主要端到端用例
+
+```bash
+bun run test:e2e:browser-google
+bun run test:e2e:codex-google
+```
+
+执行严格真实 Google 用例
+
+```bash
+bun run test:e2e:browser-google:real
+bun run test:e2e:codex-google:real
+```
+
+### 手动联调流程
+
+构建扩展
+
+```bash
+bun run --cwd apps/extension build
+```
+
+在 Chrome 扩展页面开启开发者模式，并加载 `apps/extension/dist`。
+
+启动服务
+
+```bash
+bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
+```
+
+查看远端页面
+
+```bash
+bun apps/cli/src/index.ts pages-remote --endpoint http://127.0.0.1:7878
+```
+
+同步并拉取状态
+
+```bash
+bun apps/cli/src/index.ts sync --endpoint http://127.0.0.1:7878 --page tab:123456
+bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
+```
+
+修改后回写页面
+
+```bash
+printf 'playwrong llm automation\n' > .bridge/pages/tab:123456/editable/search.query.txt
+bun apps/cli/src/index.ts apply --endpoint http://127.0.0.1:7878 --page tab:123456 --state-dir .bridge
+```
+
+调用函数
+
+```bash
+bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:123456 --id page --fn search --args '{"query":"playwrong llm automation"}'
+```
+
+### 插件体系
+
+插件仓库根目录需要提供 `playwrong.plugin.json`。
+
+关键字段
+
+- `schemaVersion`
+- `pluginId`
+- `name`
+- `version`
+- `entry`
+- `skill.path`
+- `match.hosts`
+- `match.paths`
+
+`skill.path` 指向的文档必须包含以下章节。
+
+- `Usage`
+- `Operations` 或 `Functions`
+- `Failure Modes`
+
+插件入口支持以下导出形式。
+
+- `export const pluginScripts`
+- `export default`
+
+当页面不匹配时，返回 `PLUGIN_MISS` 错误。
+
+生成托管插件注册文件
+
+```bash
+bun run plugins:generate
+```
+
+完整规范见 `plugins/PLUGIN_SPEC.md`。
+
+### 协议模型
+
+核心操作
+
+1. `pull` 获取 XML 与 editable 映射
+2. `apply` 批量回写本地修改
+3. `call` 调用节点级或页面级函数
+
+冲突规则
+
+- `REV_MISMATCH` 表示本地状态过期
+- 需先执行 `pull` 再重试
+
+### 稳定性策略
+
+配置位置为 `apps/extension/src/user-scripts/index.ts`。
+
+支持两类策略
+
+- 简单规则配置，包含 k 阈值、超时与采样间隔
+- 在插件脚本中实现自定义 `isStable`
+
+默认策略要求连续 k 次采样满足条件，并结合 URL 稳定性、请求状态与 DOM 变更信号共同判定。
+
+### 测试命令
+
+类型检查与全量测试
+
+```bash
+bun run typecheck
+bun test
+```
+
+关键端到端测试
+
+```bash
+bun run test:e2e:browser-google
+bun run test:e2e:browser-google:real
+bun run test:e2e:capability-10-sites
+bun run test:e2e:codex-google
+bun run test:e2e:codex-google:real
+```
+
+插件管理测试
+
+```bash
+bun test tests/unit/plugin-manager.spec.ts
+bun test tests/e2e/plugin-manager-http.spec.ts
+```
+
+### 常见问题
+
+`Extension websocket not connected`
+
+- 确认已加载 `apps/extension/dist`
+- 刷新页面，确保注入 content script
+
+`Expected pageType=google.search`
+
+- 当前页面不是 Google 搜索上下文
+- 先执行 `pages-remote`，再执行 `sync`
+
+`REV_MISMATCH`
+
+- 本地 editable 文件版本过旧
+- 重新执行 `pull` 后重试
+
+真实 Google 用例可能因 consent 页面、反机器人策略或地区路由变化出现偶发失败。
+
+### 参考文档
+
+- `docs/SPEC.md`
+- `docs/V2.md`
