@@ -122,6 +122,7 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 `skill.path` 指向的文档必须包含：
 - `## Usage`：怎么使用这个插件
 - `## Operations` 或 `## Functions`：可用操作/函数列表
+- `## Failure Modes`：常见失败与恢复动作
 
 完整规范见：`plugins/PLUGIN_SPEC.md`
 
@@ -176,17 +177,23 @@ LLM 只需要三类操作：
 
 ---
 
-## Codex Skill 快路径
+## Codex Skill
 
-Skill 目录：`skills/playwrong-google-search-fastpath`
+Skill 目录：
+- `skills/playwrong-google-search-fastpath`（Google 搜索快路径）
+- `skills/playwrong-plugin-authoring`（创建新插件的标准流程）
 
-核心脚本：
+Google 快路径核心脚本：
 ```bash
 bun skills/playwrong-google-search-fastpath/scripts/google_search_fastpath.ts \
   --endpoint http://127.0.0.1:7878 \
   --pageId tab:123456 \
   --query "playwrong llm automation"
 ```
+
+新增插件时，优先让 LLM 使用 `playwrong-plugin-authoring` skill，按规约落地：
+- `manifest + SKILL + src/index.ts + wiring + tests`
+- 并用 `pull/apply/call` 证据验证插件真的生效
 
 用于判定“确实走了抽象层”的关键日志：
 - `FASTPATH_PAGE_TYPE=google.search`
@@ -252,6 +259,7 @@ packages/
   plugin-sdk/   # 匹配器、Locator、插件接口
 skills/
   playwrong-google-search-fastpath/   # Codex 快路径 skill
+  playwrong-plugin-authoring/         # 新插件编写 skill
 tests/
   unit/         # 单测
   e2e/          # 端到端（含 real-google 与 codex-cli）

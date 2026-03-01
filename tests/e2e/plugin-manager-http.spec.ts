@@ -85,7 +85,10 @@ async function createGitPluginRepo(root: string): Promise<string> {
       "",
       "## Operations",
       "- Page functions: refresh()",
-      "- Node functions: click()"
+      "- Node functions: click()",
+      "",
+      "## Failure Modes",
+      "- PLUGIN_MISS"
     ].join("\n"),
     "utf8"
   );

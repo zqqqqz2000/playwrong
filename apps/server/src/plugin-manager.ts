@@ -84,7 +84,7 @@ function ensureArrayString(value: unknown, key: string): string[] {
         value: item
       });
     }
-    return item;
+    return item.trim();
   });
   return parsed;
 }
@@ -134,6 +134,55 @@ function validatePluginSkillContent(content: string, skillPath: string): void {
         requires: ["## Usage", "## Operations"]
       }
     );
+  }
+
+  const frontmatter = /^---\s*\n([\s\S]*?)\n---\s*/.exec(content);
+  if (!frontmatter) {
+    throw new BridgeError("INVALID_REQUEST", "Plugin skill must include YAML frontmatter", {
+      skillPath,
+      requires: ["name", "description"]
+    });
+  }
+  const frontmatterBody = frontmatter[1] ?? "";
+  if (!/^name:\s*\S+/im.test(frontmatterBody) || !/^description:\s*.+/im.test(frontmatterBody)) {
+    throw new BridgeError("INVALID_REQUEST", "Plugin skill frontmatter must include name and description", {
+      skillPath
+    });
+  }
+
+  const hasFailureModes = /^##\s*(failure modes?|errors?|failures?|故障|失败|异常)/im.test(trimmed);
+  if (!hasFailureModes) {
+    throw new BridgeError("INVALID_REQUEST", "Plugin skill must include a failure modes section", {
+      skillPath,
+      requires: ["## Failure Modes"]
+    });
+  }
+}
+
+function validateHostPattern(host: string): void {
+  if (host !== host.toLowerCase()) {
+    throw new BridgeError("INVALID_REQUEST", "match.hosts must be lowercase", { host });
+  }
+  if (/^https?:\/\//i.test(host) || host.includes("/") || host.includes(":")) {
+    throw new BridgeError("INVALID_REQUEST", "match.hosts must be host patterns only", { host });
+  }
+  if (!/^[a-z0-9.*-]+(\.[a-z0-9.*-]+)*$/.test(host)) {
+    throw new BridgeError("INVALID_REQUEST", "Invalid host pattern in match.hosts", { host });
+  }
+}
+
+function validatePathPattern(path: string): void {
+  if (path.includes("://")) {
+    throw new BridgeError("INVALID_REQUEST", "match.paths must be path patterns only", { path });
+  }
+  if (!(path.startsWith("/") || path.startsWith("^"))) {
+    throw new BridgeError("INVALID_REQUEST", "match.paths must start with '/' or '^'", { path });
+  }
+}
+
+function validateVersion(version: string): void {
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new BridgeError("INVALID_REQUEST", "version must be semver-like", { version });
   }
 }
 
@@ -434,7 +483,7 @@ export class PluginManager {
         manifestPath
       });
     }
-    if (!/^[a-z0-9][a-z0-9._-]{1,127}$/i.test(parsed.pluginId)) {
+    if (!/^[a-z0-9][a-z0-9._-]{1,127}$/.test(parsed.pluginId)) {
       throw new BridgeError("INVALID_REQUEST", "Invalid pluginId format", {
         pluginId: parsed.pluginId
       });
@@ -449,6 +498,7 @@ export class PluginManager {
         manifestPath
       });
     }
+    validateVersion(parsed.version);
     if (!parsed.entry || typeof parsed.entry !== "string") {
       throw new BridgeError("INVALID_REQUEST", "entry is required in playwrong.plugin.json", {
         manifestPath
@@ -482,6 +532,16 @@ export class PluginManager {
 
     const hosts = parsed.match.hosts ? ensureArrayString(parsed.match.hosts, "match.hosts") : undefined;
     const paths = parsed.match.paths ? ensureArrayString(parsed.match.paths, "match.paths") : undefined;
+    if (hosts) {
+      for (const host of hosts) {
+        validateHostPattern(host);
+      }
+    }
+    if (paths) {
+      for (const path of paths) {
+        validatePathPattern(path);
+      }
+    }
 
     if ((!hosts || hosts.length === 0) && (!paths || paths.length === 0)) {
       throw new BridgeError("INVALID_REQUEST", "match.hosts or match.paths must be provided", {

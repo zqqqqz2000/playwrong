@@ -18,6 +18,11 @@ description: Use the Hacker News reader plugin to extract story actions and open
 - Node functions:
   - `hn.story.N.open`: `click()`
 
+## Failure Modes
+
+- `PLUGIN_MISS`: not on supported Hacker News list pages.
+- Story node not found: run `refresh()` and then `sync/pull`.
+
 ## Notes
 
 - Plugin focuses on list extraction and link opening only.

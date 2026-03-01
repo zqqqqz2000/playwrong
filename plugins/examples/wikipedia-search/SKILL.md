@@ -21,6 +21,11 @@ description: Use the Wikipedia search plugin to fill query, submit search, and o
   - `wiki.search.submit`: `click()`
   - `wiki.result.N.open`: `click()`
 
+## Failure Modes
+
+- `PLUGIN_MISS`: page structure changed or page is outside plugin scope.
+- Search result list empty: keep query, run `refresh()`, then `sync/pull` again.
+
 ## Notes
 
 - Plugin scope is restricted by manifest match rules for `*.wikipedia.org`.

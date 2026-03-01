@@ -28,6 +28,12 @@ description: Use the GitHub repository manager plugin to create repositories via
   - `github.repo.new.visibility.private`: `click()`
   - `github.repo.new.auto_init`: `click()`
 
+## Failure Modes
+
+- `PLUGIN_MISS`: page is outside GitHub scope or target DOM is unavailable.
+- `Unknown page function`: extension still running old build; refresh extension and run `sync`.
+- Repository create failed server-side: check name conflict/permissions and retry with a new name.
+
 ## Notes
 
 - This plugin requires signed-in GitHub session for repository creation.

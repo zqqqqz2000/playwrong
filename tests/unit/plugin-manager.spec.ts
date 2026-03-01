@@ -85,7 +85,11 @@ async function createGitPluginRepo(root: string, input: { pluginId: string; host
       "",
       "## Operations",
       "- Page functions: refresh()",
-      "- Node functions: click(), focus()"
+      "- Node functions: click(), focus()",
+      "",
+      "## Failure Modes",
+      "- PLUGIN_MISS: page unsupported.",
+      "- ACTION_FAIL: target node missing."
     ].join("\n"),
     "utf8"
   );
@@ -172,16 +176,86 @@ describe("PluginManager", () => {
         "## Usage",
         "1. Example",
         "",
-        "## Operations",
-        "- click()"
-      ].join("\n"),
-      "utf8"
-    );
+      "## Operations",
+      "- click()",
+      "",
+      "## Failure Modes",
+      "- PLUGIN_MISS"
+    ].join("\n"),
+    "utf8"
+  );
     await Bun.$`git init`.cwd(repoDir).quiet();
     await Bun.$`git config user.email test@example.com`.cwd(repoDir).quiet();
     await Bun.$`git config user.name test`.cwd(repoDir).quiet();
     await Bun.$`git add .`.cwd(repoDir).quiet();
     await Bun.$`git commit -m init`.cwd(repoDir).quiet();
+
+    const manager = new PluginManager({ workspaceRoot: workspace });
+    await expect(manager.installFromGit({ repoUrl: repoDir })).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+  });
+
+  it("rejects plugin skill missing failure modes section", async () => {
+    const workspace = await createTempWorkspace();
+    const repoDir = await createGitPluginRepo(workspace, {
+      pluginId: "example.skill.missing.failure",
+      hosts: ["example.com"]
+    });
+
+    await writeFile(
+      join(repoDir, "SKILL.md"),
+      [
+        "---",
+        "name: missing-failure-modes-skill",
+        "description: Skill doc for validation.",
+        "---",
+        "",
+        "# Missing Failure Modes Skill",
+        "",
+        "## Usage",
+        "1. Example",
+        "",
+        "## Operations",
+        "- refresh()"
+      ].join("\n"),
+      "utf8"
+    );
+    await Bun.$`git add SKILL.md`.cwd(repoDir).quiet();
+    await Bun.$`git commit -m update-skill`.cwd(repoDir).quiet();
+
+    const manager = new PluginManager({ workspaceRoot: workspace });
+    await expect(manager.installFromGit({ repoUrl: repoDir })).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+  });
+
+  it("rejects invalid host patterns in manifest", async () => {
+    const workspace = await createTempWorkspace();
+    const repoDir = await createGitPluginRepo(workspace, {
+      pluginId: "example.bad.host.pattern",
+      hosts: ["example.com"]
+    });
+
+    await writeFile(
+      join(repoDir, "playwrong.plugin.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          pluginId: "example.bad.host.pattern",
+          name: "Bad Host Pattern",
+          version: "0.1.0",
+          entry: "src/index.ts",
+          skill: { path: "SKILL.md" },
+          match: { hosts: ["https://example.com"] }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await Bun.$`git add playwrong.plugin.json`.cwd(repoDir).quiet();
+    await Bun.$`git commit -m update-manifest-host-pattern`.cwd(repoDir).quiet();
 
     const manager = new PluginManager({ workspaceRoot: workspace });
     await expect(manager.installFromGit({ repoUrl: repoDir })).rejects.toMatchObject({
