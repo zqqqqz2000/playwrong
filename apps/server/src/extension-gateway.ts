@@ -150,6 +150,13 @@ export class ExtensionGateway implements ExecutionBridge {
     return result as ExtensionRpcResultByMethod["page.screenshot"];
   }
 
+  async reloadExtension(): Promise<void> {
+    const result = await this.request("extension.reload", {});
+    if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true) {
+      throw new BridgeError("ACTION_FAIL", "Invalid extension.reload response");
+    }
+  }
+
   private async request<M extends ExtensionRpcMethod>(
     method: M,
     params: ExtensionRpcParamsByMethod[M]

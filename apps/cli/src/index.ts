@@ -75,6 +75,15 @@ function getOptionalBooleanFlag(flags: FlagMap, key: string): boolean | undefine
   throw new Error(`Invalid boolean flag --${key}: ${String(value)}`);
 }
 
+function getNumberFlag(flags: FlagMap, key: string, fallback: number): number {
+  const raw = getFlag(flags, key, String(fallback));
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid numeric flag --${key}: ${raw}`);
+  }
+  return parsed;
+}
+
 async function writeText(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
@@ -113,6 +122,53 @@ async function getJson<T>(endpoint: string, path: string): Promise<T> {
     throw new Error(JSON.stringify(body));
   }
   return body as T;
+}
+
+async function waitForExtensionConnected(
+  endpoint: string,
+  timeoutMs: number
+): Promise<{ connected: boolean; attempts: number; elapsedMs: number }> {
+  const start = Date.now();
+  let attempts = 0;
+  while (Date.now() - start <= timeoutMs) {
+    attempts += 1;
+    const status = await getJson<{ connected?: unknown }>(endpoint, "/extension/status");
+    if (status.connected === true) {
+      return {
+        connected: true,
+        attempts,
+        elapsedMs: Date.now() - start
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return {
+    connected: false,
+    attempts,
+    elapsedMs: Date.now() - start
+  };
+}
+
+async function refreshPageViaBridge(
+  endpoint: string,
+  pageId: string
+): Promise<{ syncRev: number; call: CallResponse }> {
+  const synced = await postJson<{ rev?: unknown }>(endpoint, "/sync/page", { pageId });
+  if (typeof synced.rev !== "number") {
+    throw new Error(`Unexpected /sync/page response: ${JSON.stringify(synced)}`);
+  }
+
+  const payload: CallRequest = {
+    pageId,
+    baseRev: synced.rev,
+    target: { id: "page" },
+    fn: "refresh"
+  };
+  const call = await postJson<CallResponse>(endpoint, "/call", payload);
+  return {
+    syncRev: synced.rev,
+    call
+  };
 }
 
 async function cmdServe(flags: FlagMap): Promise<void> {
@@ -269,12 +325,60 @@ async function cmdCall(flags: FlagMap): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdExtensionReload(flags: FlagMap): Promise<void> {
+  const endpoint = getFlag(flags, "endpoint", DEFAULT_ENDPOINT);
+  const waitMs = getNumberFlag(flags, "wait-ms", 20000);
+
+  const reloadResult = await postJson<{ ok?: unknown }>(endpoint, "/extension/reload", {});
+  if (reloadResult.ok !== true) {
+    throw new Error(`Unexpected /extension/reload response: ${JSON.stringify(reloadResult)}`);
+  }
+
+  const reconnect = await waitForExtensionConnected(endpoint, waitMs);
+  if (!reconnect.connected) {
+    throw new Error(`Extension reload requested but did not reconnect within ${waitMs}ms`);
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        extensionReloaded: true,
+        connected: true,
+        waitMs: reconnect.elapsedMs,
+        attempts: reconnect.attempts
+      },
+      null,
+      2
+    )
+  );
+}
+
+async function cmdPageRefresh(flags: FlagMap): Promise<void> {
+  const endpoint = getFlag(flags, "endpoint", DEFAULT_ENDPOINT);
+  const pageId = getFlag(flags, "page");
+  const result = await refreshPageViaBridge(endpoint, pageId);
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        pageId,
+        syncRev: result.syncRev,
+        call: result.call
+      },
+      null,
+      2
+    )
+  );
+}
+
 function parseSubcommand(args: string[]): { subcommand: string; flags: FlagMap } {
   const first = args[0];
   if (!first || first.startsWith("--")) {
     throw new Error(
       "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]\n" +
-        "Install flags: --repo-url <git> | --dir <plugin-dir> | --zip <plugin.zip> | --source <git|dir|zip> --path <value>"
+        "Install flags: --repo-url <git> | --dir <plugin-dir> | --zip <plugin.zip> | --source <git|dir|zip> --path <value>\n" +
+        "Reload flags: --reload-extension <true|false> --wait-ms <ms> --page <pageId>"
     );
   }
   return {
@@ -371,8 +475,72 @@ async function cmdMappingPlugins(args: string[]): Promise<void> {
   }
 
   if (subcommand === "apply" || subcommand === "reload") {
-    const result = await postJson<Record<string, unknown>>(endpoint, "/mapping-plugins/reload", {});
-    console.log(JSON.stringify(result, null, 2));
+    const build = await postJson<Record<string, unknown>>(endpoint, "/mapping-plugins/reload", {});
+    if (subcommand === "apply") {
+      console.log(JSON.stringify(build, null, 2));
+      return;
+    }
+
+    const shouldReloadExtension = getOptionalBooleanFlag(flags, "reload-extension") ?? true;
+    const waitMs = getNumberFlag(flags, "wait-ms", 20000);
+    const pageId = flags.page && typeof flags.page === "string" ? flags.page.trim() : "";
+
+    let extensionReload:
+      | {
+          requested: true;
+          connected: boolean;
+          waitMs: number;
+          attempts: number;
+        }
+      | {
+          requested: false;
+          connected: null;
+          waitMs: 0;
+          attempts: 0;
+        };
+
+    if (shouldReloadExtension) {
+      const reloadResult = await postJson<{ ok?: unknown }>(endpoint, "/extension/reload", {});
+      if (reloadResult.ok !== true) {
+        throw new Error(`Unexpected /extension/reload response: ${JSON.stringify(reloadResult)}`);
+      }
+      const reconnect = await waitForExtensionConnected(endpoint, waitMs);
+      if (!reconnect.connected) {
+        throw new Error(`Extension reload requested but did not reconnect within ${waitMs}ms`);
+      }
+      extensionReload = {
+        requested: true,
+        connected: true,
+        waitMs: reconnect.elapsedMs,
+        attempts: reconnect.attempts
+      };
+    } else {
+      extensionReload = {
+        requested: false,
+        connected: null,
+        waitMs: 0,
+        attempts: 0
+      };
+    }
+
+    const output: {
+      build: Record<string, unknown>;
+      extensionReload: typeof extensionReload;
+      pageRefresh?: { syncRev: number; call: CallResponse; pageId: string };
+    } = {
+      build,
+      extensionReload
+    };
+
+    if (pageId.length > 0) {
+      const refreshed = await refreshPageViaBridge(endpoint, pageId);
+      output.pageRefresh = {
+        pageId,
+        ...refreshed
+      };
+    }
+
+    console.log(JSON.stringify(output, null, 2));
     return;
   }
 
@@ -386,7 +554,9 @@ async function main(): Promise<void> {
   const flags = parseFlags(rest);
 
   if (!command) {
-    console.log("Usage: bridge <serve|pages|pages-remote|sync|sync-all|pull|apply|call|mapping-plugins> [flags]");
+    console.log(
+      "Usage: bridge <serve|pages|pages-remote|sync|sync-all|pull|apply|call|extension-reload|page-refresh|mapping-plugins> [flags]"
+    );
     console.log(
       "Usage: bridge mapping-plugins <list|install|enable|disable|uninstall|generate|apply|reload> [flags]"
     );
@@ -423,6 +593,14 @@ async function main(): Promise<void> {
   }
   if (command === "call") {
     await cmdCall(flags);
+    return;
+  }
+  if (command === "extension-reload") {
+    await cmdExtensionReload(flags);
+    return;
+  }
+  if (command === "page-refresh") {
+    await cmdPageRefresh(flags);
     return;
   }
   if (command === "mapping-plugins" || command === "plugins") {

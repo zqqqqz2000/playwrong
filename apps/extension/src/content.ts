@@ -1089,6 +1089,15 @@ function toErrorPayload(error: unknown): ContentBridgeError {
 
 chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, sendResponse) => {
   void (async () => {
+    if (message.type === "playwrong.ping") {
+      const response: ContentBridgeResponse<{ ok: true }> = {
+        ok: true,
+        result: { ok: true }
+      };
+      sendResponse(response);
+      return;
+    }
+
     if (message.type === "bridge.extract") {
       const result = await extractTree();
       const response: ContentBridgeResponse<LocalExtractResult> = { ok: true, result };

@@ -95,4 +95,25 @@ describe("ExtensionGateway", () => {
 
     await expect(pending).rejects.toMatchObject({ code: "PLUGIN_MISS" });
   });
+
+  it("sends extension.reload rpc and resolves", async () => {
+    const gateway = new ExtensionGateway({ requestTimeoutMs: 100 });
+    const socket = new FakeSocket();
+    gateway.attach(socket);
+
+    const pending = gateway.reloadExtension();
+    const request = lastRequest(socket);
+    expect(request.method).toBe("extension.reload");
+
+    gateway.handleIncoming(
+      JSON.stringify({
+        type: "rpc.response",
+        id: request.id,
+        ok: true,
+        result: { ok: true }
+      })
+    );
+
+    await expect(pending).resolves.toBeUndefined();
+  });
 });

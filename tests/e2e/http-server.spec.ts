@@ -14,6 +14,7 @@ import type {
 class FakeExtensionGateway extends ExtensionGateway {
   readonly setOps: RemoteSetValueParams[] = [];
   readonly callOps: RemoteCallParams[] = [];
+  reloadCount = 0;
 
   constructor() {
     super({ requestTimeoutMs: 20 });
@@ -69,6 +70,10 @@ class FakeExtensionGateway extends ExtensionGateway {
       encoding: "base64",
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
     };
+  }
+
+  override async reloadExtension(): Promise<void> {
+    this.reloadCount += 1;
   }
 }
 
@@ -156,5 +161,20 @@ describe("HTTP server with extension gateway", () => {
     );
     expect(result.count).toBe(1);
     expect(result.synced[0]?.pageId).toBe("tab:1");
+  });
+
+  it("reloads extension via http endpoint", async () => {
+    const gateway = new FakeExtensionGateway();
+    const started = startBridgeHttpServer({
+      host: "127.0.0.1",
+      port: 0,
+      extensionGateway: gateway
+    });
+    servers.push(started.server);
+    const baseUrl = started.server.url.toString();
+
+    const result = await postJson<{ ok: boolean }>(baseUrl, "/extension/reload", {});
+    expect(result.ok).toBe(true);
+    expect(gateway.reloadCount).toBe(1);
   });
 });

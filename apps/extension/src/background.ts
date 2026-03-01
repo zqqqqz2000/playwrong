@@ -13,6 +13,8 @@ import type { ContentBridgeRequest, ContentBridgeResponse } from "./messages";
 const DEFAULT_SERVER_WS_URL = "ws://127.0.0.1:7878/ws/extension";
 const STORAGE_SERVER_WS_URL_KEY = "serverWsUrl";
 const RECONNECT_DELAY_MS = 1500;
+const RECONNECT_ALARM_NAME = "playwrong.reconnect";
+const RECONNECT_ALARM_PERIOD_MINUTES = 1;
 
 interface ContentExtractResult {
   pageType: string;
@@ -35,6 +37,12 @@ class RpcHandledError extends Error {
 
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function ensureReconnectAlarm(): void {
+  chrome.alarms.create(RECONNECT_ALARM_NAME, {
+    periodInMinutes: RECONNECT_ALARM_PERIOD_MINUTES
+  });
+}
 
 function toRpcError(error: unknown): ExtensionRpcError {
   if (error instanceof RpcHandledError) {
@@ -107,6 +115,41 @@ async function getTrackableTabs(): Promise<chrome.tabs.Tab[]> {
     }
     return tab.url.startsWith("http://") || tab.url.startsWith("https://");
   });
+}
+
+async function hasContentBridge(tabId: number): Promise<boolean> {
+  try {
+    const response = await sendToTab<{ ok: true }>(tabId, { type: "playwrong.ping" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function injectContentBridge(tabId: number): Promise<void> {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"]
+  });
+}
+
+async function ensureContentBridgeInjected(): Promise<void> {
+  const tabs = await getTrackableTabs();
+  for (const tab of tabs) {
+    const tabId = tab.id;
+    if (tabId === undefined) {
+      continue;
+    }
+    const ready = await hasContentBridge(tabId);
+    if (ready) {
+      continue;
+    }
+    try {
+      await injectContentBridge(tabId);
+    } catch {
+      // best effort inject; some tabs may not allow script execution.
+    }
+  }
 }
 
 async function listRemotePages(): Promise<ExtensionRpcResultByMethod["pages.list"]> {
@@ -253,6 +296,14 @@ async function captureRemotePageScreenshot(pageId: string): Promise<ExtensionRpc
   }
 }
 
+function requestExtensionReload(): ExtensionRpcResultByMethod["extension.reload"] {
+  // Allow rpc.response to flush before service worker restarts.
+  setTimeout(() => {
+    chrome.runtime.reload();
+  }, 80);
+  return { ok: true };
+}
+
 async function handleRpcRequest<M extends ExtensionRpcMethod>(
   method: M,
   params: ExtensionRpcRequest<M>["params"]
@@ -271,6 +322,9 @@ async function handleRpcRequest<M extends ExtensionRpcMethod>(
   }
   if (method === "page.screenshot") {
     return (await captureRemotePageScreenshot((params as { pageId: string }).pageId)) as ExtensionRpcResultByMethod[M];
+  }
+  if (method === "extension.reload") {
+    return requestExtensionReload() as ExtensionRpcResultByMethod[M];
   }
   throw new RpcHandledError("INVALID_REQUEST", `Unsupported RPC method: ${String(method)}`);
 }
@@ -332,9 +386,16 @@ async function connectSocket(): Promise<void> {
   }
 
   const wsUrl = await getServerWsUrl();
-  socket = new WebSocket(wsUrl);
+  let nextSocket: WebSocket;
+  try {
+    nextSocket = new WebSocket(wsUrl);
+  } catch {
+    scheduleReconnect();
+    throw new RpcHandledError("ACTION_FAIL", `Invalid websocket endpoint: ${wsUrl}`);
+  }
+  socket = nextSocket;
 
-  socket.addEventListener("open", () => {
+  nextSocket.addEventListener("open", () => {
     const connectedEvent: ExtensionRpcEnvelope = {
       type: "rpc.event",
       event: "extension.connected",
@@ -342,32 +403,46 @@ async function connectSocket(): Promise<void> {
         agent: "playwrong-extension"
       }
     };
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(connectedEvent));
+    if (socket === nextSocket && nextSocket.readyState === WebSocket.OPEN) {
+      nextSocket.send(JSON.stringify(connectedEvent));
     }
+    void ensureContentBridgeInjected();
   });
 
-  socket.addEventListener("message", (event) => {
+  nextSocket.addEventListener("message", (event) => {
     onSocketMessage(event as MessageEvent<string>);
   });
 
-  socket.addEventListener("close", () => {
-    socket = null;
+  nextSocket.addEventListener("close", () => {
+    if (socket === nextSocket) {
+      socket = null;
+    }
     scheduleReconnect();
   });
 
-  socket.addEventListener("error", () => {
-    if (socket && socket.readyState !== WebSocket.OPEN) {
-      socket.close();
+  nextSocket.addEventListener("error", () => {
+    if (nextSocket.readyState !== WebSocket.OPEN) {
+      nextSocket.close();
     }
   });
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  ensureReconnectAlarm();
+  void ensureContentBridgeInjected();
   void connectSocket();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  ensureReconnectAlarm();
+  void ensureContentBridgeInjected();
+  void connectSocket();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== RECONNECT_ALARM_NAME) {
+    return;
+  }
   void connectSocket();
 });
 
@@ -395,6 +470,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   void connectSocket()
     .then(() => {
+      void ensureContentBridgeInjected();
       sendResponse({ ok: true });
     })
     .catch((error: unknown) => {
@@ -407,3 +483,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 void connectSocket();
+ensureReconnectAlarm();

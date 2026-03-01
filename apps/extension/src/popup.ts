@@ -2,6 +2,7 @@ const DEFAULT_SERVER_HTTP_URL = "http://127.0.0.1:7878";
 const DEFAULT_SERVER_WS_URL = "ws://127.0.0.1:7878/ws/extension";
 const STORAGE_SERVER_WS_URL_KEY = "serverWsUrl";
 const STORAGE_SERVER_HTTP_URL_KEY = "serverHttpUrl";
+const EXTENSION_STATUS_RETRY_DELAYS_MS = [120, 260, 520] as const;
 
 interface PluginScopeRule {
   hosts?: string[];
@@ -81,6 +82,11 @@ interface ExtensionStatusResponse {
   connected: boolean;
 }
 
+interface WakeupResponse {
+  ok: boolean;
+  error?: string;
+}
+
 interface ConnectionState {
   endpoint: string;
   serverUp: boolean;
@@ -125,6 +131,10 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function showMessage(node: HTMLElement, text: string, isError: boolean): void {
@@ -226,6 +236,73 @@ async function requestJson<T>(endpoint: string, path: string, method: "GET" | "P
   return payload;
 }
 
+function parseWakeupResponse(response: unknown): WakeupResponse | null {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+  const payload = response as { ok?: unknown; error?: unknown };
+  if (typeof payload.ok !== "boolean") {
+    return null;
+  }
+  const normalized: WakeupResponse = { ok: payload.ok };
+  if (typeof payload.error === "string" && payload.error.length > 0) {
+    normalized.error = payload.error;
+  }
+  return normalized;
+}
+
+async function wakeExtensionBridge(): Promise<string | undefined> {
+  return await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "playwrong.wakeup" }, (response: unknown) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          resolve(runtimeError.message || "Failed to wake extension background");
+          return;
+        }
+
+        const wakeup = parseWakeupResponse(response);
+        if (wakeup && !wakeup.ok) {
+          resolve(wakeup.error || "Extension wakeup rejected");
+          return;
+        }
+        resolve(undefined);
+      });
+    } catch (error) {
+      resolve(formatError(error));
+    }
+  });
+}
+
+async function probeExtensionConnection(endpoint: string): Promise<{ connected: boolean; error?: string }> {
+  let detail: string | undefined = await wakeExtensionBridge();
+
+  for (let attempt = 0; attempt <= EXTENSION_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      const delay = EXTENSION_STATUS_RETRY_DELAYS_MS[attempt - 1];
+      if (delay === undefined) {
+        continue;
+      }
+      await sleep(delay);
+      const wakeError = await wakeExtensionBridge();
+      if (wakeError) {
+        detail = wakeError;
+      }
+    }
+
+    try {
+      const extension = await requestJson<ExtensionStatusResponse>(endpoint, "/extension/status", "GET");
+      if (extension.connected) {
+        return { connected: true };
+      }
+    } catch (error) {
+      detail = formatError(error);
+    }
+  }
+
+  return detail ? { connected: false, error: detail } : { connected: false };
+}
+
 function formatScope(scope: PluginScopeRule): string {
   const hosts = scope.hosts ?? [];
   const paths = scope.paths ?? [];
@@ -304,23 +381,17 @@ async function fetchConnectionState(endpoint: string): Promise<ConnectionState> 
       };
     }
 
-    try {
-      const extension = await requestJson<ExtensionStatusResponse>(endpoint, "/extension/status", "GET");
-      return {
-        endpoint,
-        serverUp: true,
-        extensionConnected: extension.connected,
-        checkedAt
-      };
-    } catch (error) {
-      return {
-        endpoint,
-        serverUp: true,
-        extensionConnected: false,
-        checkedAt,
-        error: formatError(error)
-      };
+    const probe = await probeExtensionConnection(endpoint);
+    const state: ConnectionState = {
+      endpoint,
+      serverUp: true,
+      extensionConnected: probe.connected,
+      checkedAt
+    };
+    if (probe.error) {
+      state.error = probe.error;
     }
+    return state;
   } catch (error) {
     return {
       endpoint,

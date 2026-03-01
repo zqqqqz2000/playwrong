@@ -106,6 +106,11 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { connected: extensionGateway.isConnected() });
         }
 
+        if (request.method === "POST" && url.pathname === "/extension/reload") {
+          await extensionGateway.reloadExtension();
+          return json(200, { ok: true });
+        }
+
         if (request.method === "GET" && url.pathname === "/pages") {
           return json(200, { pages: core.listPages() });
         }

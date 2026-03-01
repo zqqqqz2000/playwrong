@@ -2,6 +2,9 @@ import type { LocatorSpec, ScalarValue } from "@playwrong/protocol";
 
 export type ContentBridgeRequest =
   | {
+      type: "playwrong.ping";
+    }
+  | {
       type: "bridge.extract";
     }
   | {

@@ -42,7 +42,8 @@ export type ExtensionRpcMethod =
   | "page.extract"
   | "page.setValue"
   | "page.call"
-  | "page.screenshot";
+  | "page.screenshot"
+  | "extension.reload";
 
 export type ExtensionRpcParamsByMethod = {
   "pages.list": Record<string, never>;
@@ -50,6 +51,7 @@ export type ExtensionRpcParamsByMethod = {
   "page.setValue": RemoteSetValueParams;
   "page.call": RemoteCallParams;
   "page.screenshot": { pageId: string };
+  "extension.reload": Record<string, never>;
 };
 
 export type ExtensionRpcResultByMethod = {
@@ -58,6 +60,7 @@ export type ExtensionRpcResultByMethod = {
   "page.setValue": { ok: true };
   "page.call": { output?: unknown };
   "page.screenshot": RemoteScreenshotResult;
+  "extension.reload": { ok: true };
 };
 
 export interface ExtensionRpcRequest<
