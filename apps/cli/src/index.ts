@@ -149,6 +149,20 @@ async function waitForExtensionConnected(
   };
 }
 
+function isTransientExtensionTransportError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("No extension is connected") ||
+    message.includes("Extension disconnected") ||
+    message.includes("ConnectionRefused") ||
+    message.includes("Unable to connect")
+  );
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshPageViaBridge(
   endpoint: string,
   pageId: string
@@ -169,6 +183,59 @@ async function refreshPageViaBridge(
     syncRev: synced.rev,
     call
   };
+}
+
+async function refreshPageViaBridgeWithRetry(
+  endpoint: string,
+  pageId: string,
+  maxAttempts = 6
+): Promise<{ syncRev: number; call: CallResponse }> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await refreshPageViaBridge(endpoint, pageId);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientExtensionTransportError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      await waitForExtensionConnected(endpoint, 5000);
+      await sleepMs(250);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "refresh retry failed"));
+}
+
+async function reloadExtensionWithRetry(
+  endpoint: string,
+  totalWaitMs: number
+): Promise<{ connected: boolean; attempts: number; elapsedMs: number }> {
+  const deadline = Date.now() + totalWaitMs;
+  while (Date.now() < deadline) {
+    try {
+      const reloadResult = await postJson<{ ok?: unknown }>(endpoint, "/extension/reload", {});
+      if (reloadResult.ok !== true) {
+        throw new Error(`Unexpected /extension/reload response: ${JSON.stringify(reloadResult)}`);
+      }
+      const remainingMs = Math.max(1, deadline - Date.now());
+      const reconnect = await waitForExtensionConnected(endpoint, remainingMs);
+      if (!reconnect.connected) {
+        throw new Error(`Extension reload requested but did not reconnect within ${totalWaitMs}ms`);
+      }
+      return reconnect;
+    } catch (error) {
+      if (!isTransientExtensionTransportError(error)) {
+        throw error;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await waitForExtensionConnected(endpoint, Math.min(2500, remainingMs));
+      await sleepMs(250);
+    }
+  }
+  throw new Error(`Extension reload requested but did not reconnect within ${totalWaitMs}ms`);
 }
 
 async function cmdServe(flags: FlagMap): Promise<void> {
@@ -329,15 +396,7 @@ async function cmdExtensionReload(flags: FlagMap): Promise<void> {
   const endpoint = getFlag(flags, "endpoint", DEFAULT_ENDPOINT);
   const waitMs = getNumberFlag(flags, "wait-ms", 20000);
 
-  const reloadResult = await postJson<{ ok?: unknown }>(endpoint, "/extension/reload", {});
-  if (reloadResult.ok !== true) {
-    throw new Error(`Unexpected /extension/reload response: ${JSON.stringify(reloadResult)}`);
-  }
-
-  const reconnect = await waitForExtensionConnected(endpoint, waitMs);
-  if (!reconnect.connected) {
-    throw new Error(`Extension reload requested but did not reconnect within ${waitMs}ms`);
-  }
+  const reconnect = await reloadExtensionWithRetry(endpoint, waitMs);
 
   console.log(
     JSON.stringify(
@@ -357,7 +416,7 @@ async function cmdExtensionReload(flags: FlagMap): Promise<void> {
 async function cmdPageRefresh(flags: FlagMap): Promise<void> {
   const endpoint = getFlag(flags, "endpoint", DEFAULT_ENDPOINT);
   const pageId = getFlag(flags, "page");
-  const result = await refreshPageViaBridge(endpoint, pageId);
+  const result = await refreshPageViaBridgeWithRetry(endpoint, pageId);
   console.log(
     JSON.stringify(
       {
@@ -497,17 +556,10 @@ async function cmdMappingPlugins(args: string[]): Promise<void> {
           connected: null;
           waitMs: 0;
           attempts: 0;
-        };
+    };
 
     if (shouldReloadExtension) {
-      const reloadResult = await postJson<{ ok?: unknown }>(endpoint, "/extension/reload", {});
-      if (reloadResult.ok !== true) {
-        throw new Error(`Unexpected /extension/reload response: ${JSON.stringify(reloadResult)}`);
-      }
-      const reconnect = await waitForExtensionConnected(endpoint, waitMs);
-      if (!reconnect.connected) {
-        throw new Error(`Extension reload requested but did not reconnect within ${waitMs}ms`);
-      }
+      const reconnect = await reloadExtensionWithRetry(endpoint, waitMs);
       extensionReload = {
         requested: true,
         connected: true,
@@ -533,7 +585,7 @@ async function cmdMappingPlugins(args: string[]): Promise<void> {
     };
 
     if (pageId.length > 0) {
-      const refreshed = await refreshPageViaBridge(endpoint, pageId);
+      const refreshed = await refreshPageViaBridgeWithRetry(endpoint, pageId);
       output.pageRefresh = {
         pageId,
         ...refreshed

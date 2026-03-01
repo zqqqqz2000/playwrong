@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwrong Playwright Bridge Debug"
+  short_description: "Use pull screenshots plus call/pull evidence; Playwright only for bootstrap"
+  default_prompt: "Debug a bridge workflow with stepwise pull/call artifacts and screenshot evidence. Prefer sync/pull/call commands and only use Playwright for session/bootstrap needs."

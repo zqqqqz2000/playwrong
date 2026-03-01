@@ -151,9 +151,18 @@ export class ExtensionGateway implements ExecutionBridge {
   }
 
   async reloadExtension(): Promise<void> {
-    const result = await this.request("extension.reload", {});
-    if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true) {
-      throw new BridgeError("ACTION_FAIL", "Invalid extension.reload response");
+    const hadSocket = this.socket !== null;
+    try {
+      const result = await this.request("extension.reload", {});
+      if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true) {
+        throw new BridgeError("ACTION_FAIL", "Invalid extension.reload response");
+      }
+    } catch (error) {
+      if (hadSocket && error instanceof BridgeError && error.code === "PLUGIN_MISS") {
+        // Extension can drop websocket immediately during self-reload before replying.
+        return;
+      }
+      throw error;
     }
   }
 

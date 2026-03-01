@@ -35,6 +35,16 @@ bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:
 
 `reload` regenerates managed mapping scripts and rebuilds extension artifacts.
 
+Recommended hot-reload command when validating a live tab:
+
+```bash
+bun apps/cli/src/index.ts mapping-plugins reload \
+  --endpoint http://127.0.0.1:7878 \
+  --reload-extension true \
+  --wait-ms 20000 \
+  --page <PAGE_ID>
+```
+
 ## Output Contract
 
 For each new plugin, always create or update these files:
@@ -54,6 +64,7 @@ For each new plugin, always create or update these files:
 2. Implement `extract` first.
 - Emit nested semantic tree with stable ids.
 - Provide page-level functions in `pageCalls` for high-value flows.
+- Prefer putting persistent observational data into XML nodes in `extract` (for example result/log/overview panels), instead of relying only on debug function return payloads.
 
 3. Implement `setValue` and `invoke`.
 - For unsupported actions return `PLUGIN_MISS`.
@@ -80,6 +91,25 @@ For each new plugin, always create or update these files:
 - Confirm page type and key node ids after sync.
 - Confirm `pull` artifacts include local screenshot output at `.bridge/pages/<pageId>/screenshot.png` when extension is connected.
 - Confirm mapping plugin lifecycle is operable through `mapping-plugins` commands.
+- For every critical step, keep both machine evidence and visual evidence:
+  - call response JSON (`stepXX_<action>_call.json`)
+  - pull response JSON (`stepXX_<action>_pull.json`)
+  - screenshot (`stepXX_<action>.png`)
+
+7. Use screenshot-first debugging (no direct Playwright probing by default).
+- Prefer `pull` screenshots plus `sync/call` outputs to judge whether behavior really changed.
+- If visual state and call output disagree, trust runtime evidence first, then re-pull after 1-2s and compare again.
+- Record one final screenshot after run/debug to prove result/log pane state.
+
+8. Handle connection/revision flakiness explicitly.
+- If `/extension/status` is false or `PLUGIN_MISS: No extension is connected`, wait and retry.
+- Use `extension-reload` (or `mapping-plugins reload --reload-extension true`) before asking user for manual operations.
+- If `REV_MISMATCH` appears, run `pull` to refresh revision and retry the call.
+
+9. Keep responsibilities separated.
+- Mapping plugin owns site behavior (Monaco instance APIs, selection logic, run button detection).
+- Playwrong runtime/CLI owns transport/reload/retry mechanics.
+- Do not hardcode site-specific editor logic into runtime core files.
 
 ## Definition Of Done
 
@@ -89,6 +119,7 @@ For each new plugin, always create or update these files:
 - Action succeeds without direct CDP/Playwright DOM scripting.
 - For framework/editor pages, instance-first path is verified before DOM fallback.
 - `mapping-plugins install|enable|reload|uninstall` path is verified for the target plugin.
+- Verification includes screenshots from `pull`, not only JSON outputs.
 
 ## References
 
