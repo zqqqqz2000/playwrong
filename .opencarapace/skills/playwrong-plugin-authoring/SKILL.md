@@ -33,6 +33,16 @@ bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:787
 bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
 ```
 
+Mapping plugin runtime storage isolation:
+
+- Plugin runtime state is stored outside the Playwrong repo.
+- Use `PLAYWRONG_HOME` to override root path.
+- Default root is `~/.config/playwrong`.
+- Registry and installed plugin code live under `${PLAYWRONG_HOME}/plugins` (or `~/.config/playwrong/plugins` when env is unset).
+- Installed plugin directory uses `pluginId` directly under `${PLAYWRONG_HOME}/plugins/installed/`.
+- Do not rely on `playwrong/plugins/registry.json` as runtime source of truth.
+- For immutable packaged extension delivery, prefer declarative runtime plugins via `runtime.path`; extension reads them dynamically from `/mapping-plugins/runtime` without rebuild.
+
 `reload` regenerates managed mapping scripts and rebuilds extension artifacts.
 
 Recommended hot-reload command when validating a live tab:
@@ -60,6 +70,8 @@ For each new plugin, always create or update these files:
 1. Define manifest and scope first.
 - Follow [`plugins/PLUGIN_SPEC.md`](../../../plugins/PLUGIN_SPEC.md).
 - Keep `pluginId` lowercase and `version` semver-style.
+- Keep runtime matching self-contained in plugin scripts (`script.rules`). Do not depend on core repo generated files to inject manifest `match` rules.
+- If target environment cannot rebuild extension, add `runtime.path` JSON and validate behavior through runtime endpoint instead of relying on `mapping-plugins reload`.
 
 2. Implement `extract` first.
 - Emit nested semantic tree with stable ids.

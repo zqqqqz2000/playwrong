@@ -23,7 +23,8 @@
   - 用户可配置脚本：`apps/extension/src/user-scripts/index.ts`
     - 简单规则：`userSimpleStabilityRules`（可配置 `kConsecutive` 等稳定阈值）
     - TS 插件：`userPluginScripts`（可写 `isStable(ctx)` 自定义稳定判定）
-    - 托管插件：`managed-plugins.generated.ts`（由 `plugins/registry.json` 生成）
+    - 托管插件（构建期）：`managed-plugins.generated.ts`（桥接到 `${PLAYWRONG_HOME}/generated/managed-plugins.generated.ts`）
+    - 托管插件（运行期）：`/mapping-plugins/runtime` 返回声明式 runtime packs，background 每次请求动态下发给 content 执行
 
 ## 4. 职责边界（关键）
 - 插件输入：URL/标题/信号上下文。
@@ -122,5 +123,7 @@
 - 插件仓库必须含 `playwrong.plugin.json`
 - `match.hosts/paths` 声明插件网站作用域
 - `entry` 导出 `pluginScripts` 或 `default`（`PluginScript[]`）
-- 服务端支持 `git clone` 安装到 `plugins/installed/*`
+- 可选 `runtime.path`（声明式 JSON 运行时插件），用于“已打包、不可改 extension 代码”场景下的动态安装
+- 服务端支持 `git clone` 安装到 `${PLAYWRONG_HOME}/plugins/installed/*`（默认 `~/.config/playwrong/plugins/installed/*`）
 - 用户可在 UI 或 API 中配置插件启用/禁用
+- 运行时插件查询接口：`GET /mapping-plugins/runtime`

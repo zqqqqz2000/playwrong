@@ -22,7 +22,7 @@ Playwrong provides a stable abstraction layer between web pages and language mod
 - `apps/extension` runs Chrome MV3 scripts and bridge communication
 - `packages/protocol` defines protocol types, XML rendering, and error model
 - `packages/plugin-sdk` provides matcher, locator, and plugin interfaces
-- `plugins` stores mapping plugin specification, examples, installed plugins, and registry state
+- `plugins` stores mapping plugin specification and examples
 - `skills` contains Codex workflow skills for fast path automation and mapping plugin authoring
 
 ### XML Example For LLM
@@ -128,6 +128,16 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 
 Mapping plugin repository must include `playwrong.plugin.json` at root.
 
+Runtime storage isolation for mapping plugins:
+
+- Plugin install/registry state is outside this repository.
+- Root path: `PLAYWRONG_HOME` or default `~/.config/playwrong`.
+- Runtime files:
+  - registry: `${PLAYWRONG_HOME}/plugins/registry.json`
+  - installed plugins: `${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
+  - managed plugin source list: `${PLAYWRONG_HOME}/generated/managed-plugins.generated.ts`
+  - runtime bridge module: `node_modules/@playwrong/runtime-managed-plugins/index.ts` (generated, not committed)
+
 Required manifest fields
 
 - `schemaVersion` protocol schema version
@@ -138,6 +148,12 @@ Required manifest fields
 - `skill.path` relative skill document path
 - `match.hosts` host matching rule
 - `match.paths` path matching rule
+
+Optional runtime-only field for immutable packaged extension:
+
+- `runtime.path` relative JSON path for declarative runtime scripts.
+- Runtime scripts are read from `/mapping-plugins/runtime` by extension at request time.
+- This path allows dynamic plugin install/enable/disable without rebuilding extension bundle.
 
 Skill document pointed by `skill.path` must include the following sections.
 
@@ -174,6 +190,12 @@ Install mapping plugin from git
 bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
 ```
 
+Inspect enabled runtime packs (declarative plugins for immutable extension package)
+
+```bash
+curl -s http://127.0.0.1:7878/mapping-plugins/runtime | jq
+```
+
 Enable or disable mapping plugin
 
 ```bash
@@ -194,6 +216,7 @@ bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:787
 ```
 
 `reload` regenerates managed mapping scripts and rebuilds extension artifacts.
+For immutable packaged distribution, prefer runtime plugin packs (`runtime.path`) so rebuild is not required.
 
 Use skill `.opencarapace/skills/playwrong-plugin-authoring` to guide mapping plugin implementation and validation with this command set.
 
@@ -450,6 +473,16 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 
 映射插件仓库根目录需要提供 `playwrong.plugin.json`。
 
+映射插件运行态存储隔离：
+
+- 插件安装与注册状态不写入当前仓库。
+- 根目录使用 `PLAYWRONG_HOME`，未设置时默认 `~/.config/playwrong`。
+- 运行态路径：
+  - registry：`${PLAYWRONG_HOME}/plugins/registry.json`
+  - 已安装插件：`${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
+  - 托管插件清单：`${PLAYWRONG_HOME}/generated/managed-plugins.generated.ts`
+  - 运行时桥接模块：`node_modules/@playwrong/runtime-managed-plugins/index.ts`（生成文件，不入库）
+
 关键字段
 
 - `schemaVersion`
@@ -460,6 +493,12 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 - `skill.path`
 - `match.hosts`
 - `match.paths`
+
+可选运行时字段（面向打包后不可改代码场景）：
+
+- `runtime.path`：声明式运行时脚本 JSON 的相对路径。
+- extension 会在请求时通过 `/mapping-plugins/runtime` 动态读取。
+- 使用 `runtime.path` 后，安装/启停插件无需重打包 extension。
 
 `skill.path` 指向的文档必须包含以下章节。
 
@@ -494,6 +533,12 @@ bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
 
 ```bash
 bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
+```
+
+查看已启用 runtime packs（适用于不可重打包 extension）
+
+```bash
+curl -s http://127.0.0.1:7878/mapping-plugins/runtime | jq
 ```
 
 启用或禁用映射插件

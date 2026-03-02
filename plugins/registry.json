@@ -1,29 +1,4 @@
 {
   "version": 1,
-  "plugins": [
-    {
-      "pluginId": "tencent.wedata.explore-sql-manager",
-      "name": "WeData Explore SQL Manager",
-      "version": "0.1.0",
-      "entry": "src/index.ts",
-      "match": {
-        "hosts": [
-          "wedata.woa.com"
-        ],
-        "paths": [
-          "/explore*"
-        ]
-      },
-      "skillPath": "SKILL.md",
-      "enabled": true,
-      "source": {
-        "type": "directory",
-        "path": "/Users/jpx/Documents/playwrong-plugins/wedata"
-      },
-      "installedAt": "2026-03-01T16:07:54.325Z",
-      "updatedAt": "2026-03-01T16:37:04.791Z",
-      "dirName": "tencent.wedata.explore-sql-manager",
-      "description": "Expose WeData Explore file navigation and SQL editor operations for LLM pull/apply/call flows."
-    }
-  ]
+  "plugins": []
 }

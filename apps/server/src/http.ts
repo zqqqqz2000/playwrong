@@ -125,6 +125,11 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
           return json(200, { plugins });
         }
 
+        if (request.method === "GET" && isMappingPluginRoute(url.pathname, "/runtime")) {
+          const plugins = await pluginManager.listEnabledRuntimePluginPacks();
+          return json(200, { plugins });
+        }
+
         if (request.method === "POST" && isMappingPluginRoute(url.pathname, "/install")) {
           const payload = await readJson<InstallPluginRequest>(request);
           const plugin = await pluginManager.install(payload);

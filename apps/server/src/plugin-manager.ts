@@ -1,4 +1,5 @@
 import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { BridgeError } from "@playwrong/protocol";
 
@@ -11,6 +12,10 @@ export interface PluginSkillSpec {
   path: string;
 }
 
+export interface PluginRuntimeSpec {
+  path: string;
+}
+
 export interface PluginPackManifest {
   schemaVersion: 1;
   pluginId: string;
@@ -20,6 +25,7 @@ export interface PluginPackManifest {
   entry: string;
   match: PluginScopeRule;
   skill: PluginSkillSpec;
+  runtime?: PluginRuntimeSpec;
 }
 
 export interface PluginSourceGit {
@@ -48,11 +54,20 @@ export interface InstalledPluginRecord {
   entry: string;
   match: PluginScopeRule;
   skillPath?: string;
+  runtimePath?: string;
   enabled: boolean;
   source: PluginSource;
   installedAt: string;
   updatedAt: string;
   dirName: string;
+}
+
+export interface RuntimePluginPack {
+  pluginId: string;
+  name: string;
+  version: string;
+  updatedAt: string;
+  runtimeJson: string;
 }
 
 interface PluginRegistryFile {
@@ -86,8 +101,12 @@ export interface InstallPluginInput {
 
 export interface PluginManagerOptions {
   workspaceRoot?: string;
+  playwrongHomeDir?: string;
   pluginsRootDir?: string;
   generatedFilePath?: string;
+  managedRuntimeModulePath?: string;
+  // Backward compatible alias for managedRuntimeModulePath.
+  generatedBridgeFilePath?: string;
   extensionBuildCommand?: string[];
 }
 
@@ -98,6 +117,9 @@ interface CommandResult {
 
 const DEFAULT_REGISTRY_FILE = "registry.json";
 const DEFAULT_INSTALLED_DIR = "installed";
+const PLAYWRONG_HOME_ENV = "PLAYWRONG_HOME";
+const DEFAULT_PLAYWRONG_HOME_DIR = ".config/playwrong";
+const DEFAULT_RUNTIME_MANAGED_PACKAGE_NAME = "@playwrong/runtime-managed-plugins";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -128,8 +150,43 @@ function ensureFileImportPath(fromDir: string, absPath: string): string {
   return importPath;
 }
 
-function sanitizePluginDirName(pluginId: string): string {
-  return pluginId.replace(/[^a-zA-Z0-9._-]/g, "_");
+function expandHomePath(pathValue: string): string {
+  if (pathValue === "~") {
+    return homedir();
+  }
+  if (pathValue.startsWith("~/")) {
+    return join(homedir(), pathValue.slice(2));
+  }
+  return pathValue;
+}
+
+function resolvePlaywrongHomeDir(input?: string): string {
+  const explicit = typeof input === "string" ? input.trim() : "";
+  if (explicit) {
+    const resolved = expandHomePath(explicit);
+    return isAbsolute(resolved) ? resolved : join(process.cwd(), resolved);
+  }
+
+  const fromEnv = typeof process.env[PLAYWRONG_HOME_ENV] === "string" ? process.env[PLAYWRONG_HOME_ENV].trim() : "";
+  if (fromEnv) {
+    const resolved = expandHomePath(fromEnv);
+    return isAbsolute(resolved) ? resolved : join(process.cwd(), resolved);
+  }
+
+  return join(homedir(), DEFAULT_PLAYWRONG_HOME_DIR);
+}
+
+function buildPluginDirName(pluginId: string): string {
+  return pluginId;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isSafeRelativePath(path: string): boolean {
@@ -219,19 +276,32 @@ function validateVersion(version: string): void {
 // PluginManager manages mapping plugins that convert site pages into semantic XML for LLM workflows.
 export class PluginManager {
   private readonly workspaceRoot: string;
+  private readonly playwrongHomeDir: string;
   private readonly pluginsRootDir: string;
   private readonly installedRootDir: string;
   private readonly registryPath: string;
+  private readonly legacyPluginsRootDir: string;
+  private readonly legacyInstalledRootDir: string;
+  private readonly legacyRegistryPath: string;
   private readonly generatedFilePath: string;
+  private readonly managedRuntimeModulePath: string;
   private readonly extensionBuildCommand: string[];
+  private didMigrateLegacyLayout = false;
 
   constructor(options: PluginManagerOptions = {}) {
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
-    this.pluginsRootDir = options.pluginsRootDir ?? join(this.workspaceRoot, "plugins");
+    this.playwrongHomeDir = resolvePlaywrongHomeDir(options.playwrongHomeDir);
+    this.pluginsRootDir = options.pluginsRootDir ?? join(this.playwrongHomeDir, "plugins");
     this.installedRootDir = join(this.pluginsRootDir, DEFAULT_INSTALLED_DIR);
     this.registryPath = join(this.pluginsRootDir, DEFAULT_REGISTRY_FILE);
-    this.generatedFilePath =
-      options.generatedFilePath ?? join(this.workspaceRoot, "apps/extension/src/user-scripts/managed-plugins.generated.ts");
+    this.legacyPluginsRootDir = join(this.workspaceRoot, "plugins");
+    this.legacyInstalledRootDir = join(this.legacyPluginsRootDir, DEFAULT_INSTALLED_DIR);
+    this.legacyRegistryPath = join(this.legacyPluginsRootDir, DEFAULT_REGISTRY_FILE);
+    this.generatedFilePath = options.generatedFilePath ?? join(this.playwrongHomeDir, "generated", "managed-plugins.generated.ts");
+    this.managedRuntimeModulePath =
+      options.managedRuntimeModulePath ??
+      options.generatedBridgeFilePath ??
+      join(this.workspaceRoot, "node_modules/@playwrong/runtime-managed-plugins/index.ts");
     this.extensionBuildCommand =
       options.extensionBuildCommand ?? ["bun", "run", "--cwd", join(this.workspaceRoot, "apps/extension"), "build"];
   }
@@ -242,6 +312,32 @@ export class PluginManager {
       .slice()
       .sort((a, b) => a.pluginId.localeCompare(b.pluginId))
       .map((plugin) => ({ ...plugin }));
+  }
+
+  async listEnabledRuntimePluginPacks(): Promise<RuntimePluginPack[]> {
+    const registry = await this.readRegistry();
+    const enabledWithRuntime = registry.plugins
+      .filter((plugin) => plugin.enabled && typeof plugin.runtimePath === "string" && plugin.runtimePath.length > 0)
+      .sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+
+    const packs: RuntimePluginPack[] = [];
+    for (const plugin of enabledWithRuntime) {
+      const runtimeRelPath = plugin.runtimePath;
+      if (!runtimeRelPath) {
+        continue;
+      }
+      const runtimeAbsPath = join(this.installedRootDir, plugin.dirName, runtimeRelPath);
+      await this.assertFileExists(runtimeAbsPath, `runtime.path not found for plugin ${plugin.pluginId}`);
+      const runtimeJson = await readFile(runtimeAbsPath, "utf8");
+      packs.push({
+        pluginId: plugin.pluginId,
+        name: plugin.name,
+        version: plugin.version,
+        updatedAt: plugin.updatedAt,
+        runtimeJson
+      });
+    }
+    return packs;
   }
 
   async install(input: InstallPluginInput): Promise<InstalledPluginRecord> {
@@ -439,77 +535,61 @@ export class PluginManager {
 
     const enabledPlugins = registry.plugins.filter((plugin) => plugin.enabled);
     const importLines: string[] = [];
-    const entryLines: string[] = [];
+    const moduleVarNames: string[] = [];
 
     for (const [i, plugin] of enabledPlugins.entries()) {
       const entryAbsPath = await this.resolvePluginEntryPath(plugin);
       const modulePath = ensureFileImportPath(outputDir, entryAbsPath);
-      importLines.push(`import * as pluginModule${i} from "${modulePath}";`);
-
-      const scopeLiteral = JSON.stringify(
-        {
-          ...(plugin.match.hosts && plugin.match.hosts.length > 0 ? { hosts: plugin.match.hosts } : {}),
-          ...(plugin.match.paths && plugin.match.paths.length > 0 ? { paths: plugin.match.paths } : {})
-        },
-        null,
-        2
-      )
-        .split("\n")
-        .join("\n      ");
-
-      entryLines.push(`  {
-    pluginId: ${JSON.stringify(plugin.pluginId)},
-    scripts: normalizePluginScripts(pluginModule${i}),
-    scope: ${scopeLiteral}
-  }`);
+      const moduleVar = `pluginModule${i}`;
+      importLines.push(`import * as ${moduleVar} from "${modulePath}";`);
+      moduleVarNames.push(moduleVar);
     }
 
+    const moduleListLiteral = moduleVarNames.join(", ");
     const content = [
       "/* eslint-disable */",
       "// AUTO-GENERATED FILE. DO NOT EDIT.",
       "// Generated by PluginManager.generateManagedPluginsFile().",
-      'import type { PluginScript, ScriptMatchRule } from "@playwrong/plugin-sdk";',
+      'import type { PluginScript } from "@playwrong/plugin-sdk";',
       importLines.join("\n"),
       "",
       "type PluginModuleLike = { pluginScripts?: PluginScript[]; default?: PluginScript[] };",
       "",
-      "function normalizePluginScripts(input: unknown): PluginScript[] {",
+      "function normalizePluginScripts(input: unknown, moduleIndex: number): PluginScript[] {",
       "  const candidate = input as PluginModuleLike;",
-      "  if (Array.isArray(candidate.pluginScripts)) {",
-      "    return candidate.pluginScripts;",
-      "  }",
-      "  if (Array.isArray(candidate.default)) {",
-      "    return candidate.default;",
-      "  }",
-      "  return [];",
+      "  const scripts = Array.isArray(candidate.pluginScripts)",
+      "    ? candidate.pluginScripts",
+      "    : Array.isArray(candidate.default)",
+      "      ? candidate.default",
+      "      : [];",
+      "  return scripts.map((script, index) => ({",
+      "    ...script,",
+      "    scriptId: script.scriptId || `managed.plugin.${moduleIndex + 1}.${index + 1}`",
+      "  }));",
       "}",
       "",
-      "function mergeScope(pluginId: string, scripts: PluginScript[], scope: ScriptMatchRule): PluginScript[] {",
-      "  return scripts.map((script, index) => {",
-      "    const scriptId = script.scriptId || `${pluginId}.${index + 1}`;",
-      "    const rules = script.rules && script.rules.length > 0 ? [scope, ...script.rules] : [scope];",
-      "    return { ...script, scriptId, rules };",
-      "  });",
-      "}",
+      `const managedPluginModules: PluginModuleLike[] = [${moduleListLiteral}];`,
       "",
-      "const managedPluginEntries: Array<{ pluginId: string; scripts: PluginScript[]; scope: ScriptMatchRule }> = [",
-      entryLines.join(",\n"),
-      "];",
-      "",
-      "export const managedPluginScripts: PluginScript[] = managedPluginEntries.flatMap((entry) =>",
-      "  mergeScope(entry.pluginId, entry.scripts, entry.scope)",
+      "export const managedPluginScripts: PluginScript[] = managedPluginModules.flatMap((entry, moduleIndex) =>",
+      "  normalizePluginScripts(entry, moduleIndex)",
       ");",
       "",
-      "export const managedPluginInfo = managedPluginEntries.map((entry) => ({",
-      "  pluginId: entry.pluginId,",
-      "  scriptCount: entry.scripts.length",
-      "}));",
+      "export const managedPluginInfo = {",
+      "  moduleCount: managedPluginModules.length,",
+      "  scriptCount: managedPluginScripts.length",
+      "};",
+      "",
+      "export const managedPluginModuleCount = managedPluginModules.length;",
+      "",
+      "export const managedPluginScriptCount = managedPluginScripts.length;",
+      "",
       ""
     ]
       .filter((line) => line !== undefined)
       .join("\n");
 
     await writeFile(this.generatedFilePath, content, "utf8");
+    await this.writeManagedRuntimeModule();
     return {
       outputPath: this.generatedFilePath,
       pluginCount: registry.plugins.length,
@@ -584,7 +664,7 @@ export class PluginManager {
     source: PluginSource;
   }): Promise<InstalledPluginRecord> {
     const manifest = await this.readManifest(input.stageDir);
-    const dirName = sanitizePluginDirName(manifest.pluginId);
+    const dirName = buildPluginDirName(manifest.pluginId);
     const destDir = join(this.installedRootDir, dirName);
     await rm(destDir, { recursive: true, force: true });
     await rename(input.stageDir, destDir);
@@ -630,6 +710,9 @@ export class PluginManager {
     if (manifest.description !== undefined) {
       record.description = manifest.description;
     }
+    if (manifest.runtime?.path) {
+      record.runtimePath = manifest.runtime.path;
+    }
 
     const nextPlugins = registry.plugins.filter((plugin) => plugin.pluginId !== manifest.pluginId);
     nextPlugins.push(record);
@@ -647,7 +730,7 @@ export class PluginManager {
       const raw = await readFile(this.registryPath, "utf8");
       const parsed = JSON.parse(raw) as Partial<PluginRegistryFile>;
       if (parsed.version !== 1 || !Array.isArray(parsed.plugins)) {
-        throw new BridgeError("INVALID_REQUEST", "Invalid plugins/registry.json format", {
+        throw new BridgeError("INVALID_REQUEST", "Invalid plugins registry format", {
           registryPath: this.registryPath
         });
       }
@@ -655,10 +738,12 @@ export class PluginManager {
         ...plugin,
         ...(plugin.skillPath ? { skillPath: plugin.skillPath } : {})
       }));
-      return {
+      const registry: PluginRegistryFile = {
         version: 1,
         plugins: normalizedPlugins
       };
+      await this.normalizeRegistryDirNames(registry);
+      return registry;
     } catch (error) {
       if (error instanceof BridgeError) {
         throw error;
@@ -732,6 +817,28 @@ export class PluginManager {
         skillPath: parsed.skill.path
       });
     }
+
+    let runtimePath: string | undefined;
+    if (parsed.runtime !== undefined) {
+      if (!parsed.runtime || typeof parsed.runtime !== "object") {
+        throw new BridgeError("INVALID_REQUEST", "runtime must be an object when provided", {
+          manifestPath
+        });
+      }
+      const runtime = parsed.runtime as Partial<PluginRuntimeSpec>;
+      if (!runtime.path || typeof runtime.path !== "string") {
+        throw new BridgeError("INVALID_REQUEST", "runtime.path must be a string when runtime is provided", {
+          manifestPath
+        });
+      }
+      if (!isSafeRelativePath(runtime.path)) {
+        throw new BridgeError("INVALID_REQUEST", "runtime.path must be a safe relative path", {
+          runtimePath: runtime.path
+        });
+      }
+      runtimePath = runtime.path;
+    }
+
     if (!parsed.match || typeof parsed.match !== "object") {
       throw new BridgeError("INVALID_REQUEST", "match is required in playwrong.plugin.json", {
         manifestPath
@@ -763,6 +870,18 @@ export class PluginManager {
     await this.assertFileExists(skillPath, `Plugin skill not found: ${parsed.skill.path}`);
     const skillContent = await readFile(skillPath, "utf8");
     validatePluginSkillContent(skillContent, parsed.skill.path);
+    if (runtimePath) {
+      const runtimeFilePath = join(pluginRootDir, runtimePath);
+      await this.assertFileExists(runtimeFilePath, `Plugin runtime file not found: ${runtimePath}`);
+      try {
+        JSON.parse(await readFile(runtimeFilePath, "utf8"));
+      } catch (error) {
+        throw new BridgeError("INVALID_REQUEST", "runtime.path must point to valid JSON", {
+          runtimePath,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
 
     const manifest: PluginPackManifest = {
       schemaVersion: 1,
@@ -781,6 +900,11 @@ export class PluginManager {
     if (parsed.description && typeof parsed.description === "string") {
       manifest.description = parsed.description;
     }
+    if (runtimePath) {
+      manifest.runtime = {
+        path: runtimePath
+      };
+    }
 
     return manifest;
   }
@@ -794,8 +918,89 @@ export class PluginManager {
   }
 
   private async ensureBaseDirs(): Promise<void> {
+    await this.migrateLegacyWorkspaceLayout();
     await mkdir(this.pluginsRootDir, { recursive: true });
     await mkdir(this.installedRootDir, { recursive: true });
+  }
+
+  private async writeManagedRuntimeModule(): Promise<void> {
+    const moduleDir = dirname(this.managedRuntimeModulePath);
+    await mkdir(moduleDir, { recursive: true });
+    const importPath = ensureFileImportPath(moduleDir, this.generatedFilePath);
+    const content = [
+      "/* eslint-disable */",
+      "// AUTO-GENERATED FILE. DO NOT EDIT.",
+      "// Generated by PluginManager.generateManagedPluginsFile().",
+      `export { managedPluginScripts, managedPluginInfo, managedPluginModuleCount, managedPluginScriptCount } from ${JSON.stringify(importPath)};`,
+      ""
+    ].join("\n");
+    await writeFile(this.managedRuntimeModulePath, content, "utf8");
+
+    const packageJsonPath = join(moduleDir, "package.json");
+    const packageJson = {
+      name: DEFAULT_RUNTIME_MANAGED_PACKAGE_NAME,
+      private: true,
+      type: "module",
+      main: "./index.ts"
+    };
+    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+  }
+
+  private async migrateLegacyWorkspaceLayout(): Promise<void> {
+    if (this.didMigrateLegacyLayout) {
+      return;
+    }
+    this.didMigrateLegacyLayout = true;
+    if (this.pluginsRootDir === this.legacyPluginsRootDir) {
+      return;
+    }
+
+    const hasCurrentRegistry = await pathExists(this.registryPath);
+    const hasLegacyRegistry = await pathExists(this.legacyRegistryPath);
+    if (hasCurrentRegistry || !hasLegacyRegistry) {
+      return;
+    }
+
+    await mkdir(this.pluginsRootDir, { recursive: true });
+    await mkdir(this.installedRootDir, { recursive: true });
+
+    const legacyInstalledExists = await pathExists(this.legacyInstalledRootDir);
+    if (legacyInstalledExists) {
+      await cp(this.legacyInstalledRootDir, this.installedRootDir, {
+        recursive: true,
+        force: true
+      });
+    }
+    await cp(this.legacyRegistryPath, this.registryPath, {
+      force: true
+    });
+  }
+
+  private async normalizeRegistryDirNames(registry: PluginRegistryFile): Promise<void> {
+    let changed = false;
+    for (const plugin of registry.plugins) {
+      const expectedDirName = buildPluginDirName(plugin.pluginId);
+      if (plugin.dirName === expectedDirName) {
+        continue;
+      }
+
+      const currentDirName = plugin.dirName;
+      const currentDir = join(this.installedRootDir, currentDirName);
+      const expectedDir = join(this.installedRootDir, expectedDirName);
+      const currentExists = await pathExists(currentDir);
+      const expectedExists = await pathExists(expectedDir);
+      if (currentExists && !expectedExists) {
+        await rename(currentDir, expectedDir);
+      } else if (currentExists && expectedExists) {
+        await rm(currentDir, { recursive: true, force: true });
+      }
+      plugin.dirName = expectedDirName;
+      changed = true;
+    }
+
+    if (changed) {
+      await this.writeRegistry(registry);
+    }
   }
 
   private async runCommand(command: string[], cwd: string): Promise<CommandResult> {

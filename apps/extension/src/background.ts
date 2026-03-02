@@ -8,7 +8,7 @@ import type {
   ExtensionRpcResultByMethod,
   RemoteExtractResult
 } from "@playwrong/protocol";
-import type { ContentBridgeRequest, ContentBridgeResponse } from "./messages";
+import type { ContentBridgeRequest, ContentBridgeResponse, RuntimePluginPackPayload } from "./messages";
 
 const DEFAULT_SERVER_WS_URL = "ws://127.0.0.1:7878/ws/extension";
 const STORAGE_SERVER_WS_URL_KEY = "serverWsUrl";
@@ -74,6 +74,83 @@ async function getServerWsUrl(): Promise<string> {
     return maybeUrl;
   }
   return DEFAULT_SERVER_WS_URL;
+}
+
+function wsToHttpBase(wsUrl: string): string | null {
+  try {
+    const parsed = new URL(wsUrl);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    const protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+    return `${protocol}//${parsed.host}`;
+  } catch {
+    return null;
+  }
+}
+
+function parseRuntimePluginPacksPayload(input: unknown): RuntimePluginPackPayload[] {
+  if (!input || typeof input !== "object") {
+    return [];
+  }
+  const record = input as { plugins?: unknown };
+  if (!Array.isArray(record.plugins)) {
+    return [];
+  }
+
+  const out: RuntimePluginPackPayload[] = [];
+  for (const candidate of record.plugins) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const plugin = candidate as {
+      pluginId?: unknown;
+      name?: unknown;
+      version?: unknown;
+      updatedAt?: unknown;
+      runtimeJson?: unknown;
+    };
+    if (
+      typeof plugin.pluginId !== "string" ||
+      typeof plugin.name !== "string" ||
+      typeof plugin.version !== "string" ||
+      typeof plugin.updatedAt !== "string" ||
+      typeof plugin.runtimeJson !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      pluginId: plugin.pluginId,
+      name: plugin.name,
+      version: plugin.version,
+      updatedAt: plugin.updatedAt,
+      runtimeJson: plugin.runtimeJson
+    });
+  }
+  return out;
+}
+
+async function fetchRuntimePluginPacks(): Promise<RuntimePluginPackPayload[]> {
+  const wsUrl = await getServerWsUrl();
+  const baseUrl = wsToHttpBase(wsUrl);
+  if (!baseUrl) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(new URL("/mapping-plugins/runtime", baseUrl), {
+      method: "GET",
+      headers: {
+        "content-type": "application/json"
+      }
+    });
+    if (!response.ok) {
+      return [];
+    }
+    return parseRuntimePluginPacksPayload(await response.json());
+  } catch {
+    return [];
+  }
 }
 
 function parsePageId(pageId: string): number {
@@ -285,7 +362,11 @@ async function extractRemotePage(pageId: string): Promise<ExtensionRpcResultByMe
     tab = null;
   }
 
-  const response = await sendToTab<ContentExtractResult>(tabId, { type: "bridge.extract" });
+  const runtimePluginPacks = await fetchRuntimePluginPacks();
+  const response = await sendToTab<ContentExtractResult>(tabId, {
+    type: "bridge.extract",
+    runtimePluginPacks
+  });
   if (!response.ok) {
     throw new RpcHandledError(response.error.code, response.error.message, response.error.details);
   }
@@ -312,10 +393,12 @@ async function setRemoteValue(
   params: ExtensionRpcRequest<"page.setValue">["params"]
 ): Promise<ExtensionRpcResultByMethod["page.setValue"]> {
   const tabId = parsePageId(params.pageId);
+  const runtimePluginPacks = await fetchRuntimePluginPacks();
   const request: ContentBridgeRequest = {
     type: "bridge.setValue",
     target: params.target,
-    value: params.value
+    value: params.value,
+    runtimePluginPacks
   };
   if (params.locator) {
     request.locator = params.locator;
@@ -332,10 +415,12 @@ async function callRemoteFunction(
   params: ExtensionRpcRequest<"page.call">["params"]
 ): Promise<ExtensionRpcResultByMethod["page.call"]> {
   const tabId = parsePageId(params.pageId);
+  const runtimePluginPacks = await fetchRuntimePluginPacks();
   const request: ContentBridgeRequest = {
     type: "bridge.call",
     target: params.target,
-    fn: params.fn
+    fn: params.fn,
+    runtimePluginPacks
   };
   if (params.locator) {
     request.locator = params.locator;

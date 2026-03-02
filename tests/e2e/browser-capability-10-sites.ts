@@ -1,5 +1,5 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { startBridgeHttpServer } from "../../apps/server/src/http";
 import type {
@@ -53,7 +53,7 @@ interface SiteResult {
   issues: string[];
 }
 
-const ROOT = "/Users/zzzz/Documents/Playwrong";
+const ROOT = process.env.PLAYWRONG_E2E_ROOT || resolve(join(import.meta.dir, "../.."));
 const EXTENSION_DIST = join(ROOT, "apps/extension/dist");
 const USER_DATA_DIR = join(ROOT, "tmp/e2e/capability-10-sites-user-data");
 const REPORT_DIR = join(ROOT, "tmp/e2e/capability-10-sites");

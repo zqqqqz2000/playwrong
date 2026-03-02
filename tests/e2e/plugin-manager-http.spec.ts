@@ -26,8 +26,6 @@ afterEach(async () => {
 async function createWorkspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "playwrong-plugin-http-"));
   tempRoots.push(root);
-  await mkdir(join(root, "plugins/installed"), { recursive: true });
-  await writeFile(join(root, "plugins/registry.json"), JSON.stringify({ version: 1, plugins: [] }, null, 2), "utf8");
   return root;
 }
 
@@ -45,6 +43,7 @@ async function createPluginDir(root: string, dirName = "http-plugin-repo"): Prom
         version: "0.1.0",
         entry: "src/index.ts",
         skill: { path: "SKILL.md" },
+        runtime: { path: "runtime-plugin.json" },
         match: { hosts: ["example.com"] }
       },
       null,
@@ -93,6 +92,33 @@ async function createPluginDir(root: string, dirName = "http-plugin-repo"): Prom
     "utf8"
   );
 
+  await writeFile(
+    join(repoDir, "runtime-plugin.json"),
+    JSON.stringify(
+      {
+        scripts: [
+          {
+            scriptId: "example.http.runtime.script",
+            rules: [{ hosts: ["example.com"], paths: ["/"] }],
+            extract: {
+              pageType: "example.http.runtime",
+              fields: [
+                {
+                  id: "runtime.title",
+                  label: "Title",
+                  select: { selector: "title" }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
   return repoDir;
 }
 
@@ -131,6 +157,9 @@ describe("Plugin manager HTTP routes", () => {
 
     const pluginManager = new PluginManager({
       workspaceRoot: workspace,
+      playwrongHomeDir: join(workspace, ".playwrong-home"),
+      generatedFilePath: join(workspace, "generated", "managed-plugins.generated.ts"),
+      generatedBridgeFilePath: join(workspace, "bridge", "managed-plugins.generated.ts"),
       extensionBuildCommand: ["bun", "--version"]
     });
 
@@ -160,6 +189,15 @@ describe("Plugin manager HTTP routes", () => {
       "GET"
     );
     expect(listResult.plugins).toHaveLength(1);
+
+    const runtimeList = await requestJson<{ plugins: Array<{ pluginId: string; runtimeJson: string }> }>(
+      baseUrl,
+      "/mapping-plugins/runtime",
+      "GET"
+    );
+    expect(runtimeList.plugins).toHaveLength(1);
+    expect(runtimeList.plugins[0]?.pluginId).toBe("example.http.plugin");
+    expect(runtimeList.plugins[0]?.runtimeJson).toContain("example.http.runtime.script");
 
     const backwardCompatibleList = await requestJson<{ plugins: Array<{ pluginId: string }> }>(baseUrl, "/plugins", "GET");
     expect(backwardCompatibleList.plugins).toHaveLength(1);

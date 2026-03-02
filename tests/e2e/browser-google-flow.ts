@@ -1,5 +1,5 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright";
 import { startBridgeHttpServer } from "../../apps/server/src/http";
 import type {
@@ -15,11 +15,12 @@ import type {
 
 type E2EMode = "google-like" | "real-google";
 
-const ROOT = "/Users/zzzz/Documents/Playwrong";
+const ROOT = process.env.PLAYWRONG_E2E_ROOT || resolve(join(import.meta.dir, "../.."));
 const EXTENSION_DIST = join(ROOT, "apps/extension/dist");
 const USER_DATA_DIR = join(ROOT, "tmp/e2e/google-user-data");
 const FIXTURE_PATH = join(ROOT, "tests/fixtures/google-like.html");
 const BRIDGE_STATE_DIR = join(ROOT, ".bridge-e2e-google");
+const DEFAULT_ENDPOINT = process.env.PLAYWRONG_E2E_ENDPOINT || "http://127.0.0.1:7878";
 
 const MODE: E2EMode = process.env.PLAYWRONG_E2E_TARGET === "real-google" ? "real-google" : "google-like";
 const REAL_GOOGLE_URL = process.env.PLAYWRONG_REAL_GOOGLE_URL || "https://www.google.com/ncr?hl=en";
@@ -300,11 +301,24 @@ async function main(): Promise<void> {
     });
   }
 
-  const bridgeStarted = startBridgeHttpServer({
-    host: "127.0.0.1",
-    port: 7878
-  });
-  const bridgeBaseUrl = bridgeStarted.server.url.toString();
+  const endpointUrl = new URL(DEFAULT_ENDPOINT);
+  const endpointPort = Number(endpointUrl.port || (endpointUrl.protocol === "https:" ? "443" : "80"));
+  let bridgeStarted: ReturnType<typeof startBridgeHttpServer> | null = null;
+  let useExternalServer = false;
+
+  try {
+    bridgeStarted = startBridgeHttpServer({
+      host: endpointUrl.hostname,
+      port: endpointPort
+    });
+  } catch {
+    const health = await fetch(new URL("/health", DEFAULT_ENDPOINT)).catch(() => null);
+    if (!health || !health.ok) {
+      throw new Error(`Cannot start bridge server at ${DEFAULT_ENDPOINT} and no external server found`);
+    }
+    useExternalServer = true;
+  }
+  const bridgeBaseUrl = DEFAULT_ENDPOINT;
 
   let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null = null;
   try {
@@ -465,7 +479,9 @@ async function main(): Promise<void> {
     if (context) {
       await context.close();
     }
-    bridgeStarted.server.stop(true);
+    if (!useExternalServer && bridgeStarted) {
+      bridgeStarted.server.stop(true);
+    }
     fixtureServer?.stop(true);
   }
 }

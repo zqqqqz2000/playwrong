@@ -12,8 +12,14 @@ import type {
   ScalarValue,
   SemanticNode
 } from "@playwrong/protocol";
-import type { ContentBridgeError, ContentBridgeRequest, ContentBridgeResponse } from "./messages";
+import type {
+  ContentBridgeError,
+  ContentBridgeRequest,
+  ContentBridgeResponse,
+  RuntimePluginPackPayload
+} from "./messages";
 import { ExtensionPluginHost, type SelectedPluginScript } from "./plugin-host";
+import { buildRuntimeManagedPluginScripts } from "./runtime-managed-plugins";
 import { createBuiltinSiteScripts } from "./site-scripts";
 import { userPluginScripts, userSimpleStabilityRules, type UserSimpleStabilityRule } from "./user-scripts";
 
@@ -31,7 +37,8 @@ const SEARCH_QUERY_SELECTOR = "input[name='q'],textarea[name='q'],input#sb_form_
 const SEARCH_SUBMIT_SELECTOR = "button[type='submit'],input[type='submit'],input[name='btnK'],input#sb_form_go";
 const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
 
-const pluginHost = new ExtensionPluginHost([...createBuiltinSiteScripts(), ...userPluginScripts]);
+const basePluginScripts = [...createBuiltinSiteScripts(), ...userPluginScripts];
+const basePluginHost = new ExtensionPluginHost(basePluginScripts);
 let latestTree: SemanticNode[] = [];
 
 const DEFAULT_STABILITY_POLICY: Required<StabilityPolicy> = {
@@ -188,6 +195,17 @@ function createMatchContext(): MatchContext {
     title: document.title,
     signals: collectMatchSignals()
   };
+}
+
+function getPluginHost(runtimePluginPacks: RuntimePluginPackPayload[] | undefined): ExtensionPluginHost {
+  if (!runtimePluginPacks || runtimePluginPacks.length === 0) {
+    return basePluginHost;
+  }
+  const runtimeScripts = buildRuntimeManagedPluginScripts(runtimePluginPacks);
+  if (runtimeScripts.length === 0) {
+    return basePluginHost;
+  }
+  return new ExtensionPluginHost([...basePluginScripts, ...runtimeScripts]);
 }
 
 function isPluginMiss(error: unknown): boolean {
@@ -778,8 +796,9 @@ function extractGenericTree(): LocalExtractResult {
   };
 }
 
-async function extractTree(): Promise<LocalExtractResult> {
+async function extractTree(runtimePluginPacks: RuntimePluginPackPayload[] | undefined): Promise<LocalExtractResult> {
   const matchContext = createMatchContext();
+  const pluginHost = getPluginHost(runtimePluginPacks);
   const selected = await pluginHost.select(matchContext);
   let pluginResult: PluginExtractResult | null = null;
 
@@ -1099,7 +1118,7 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
     }
 
     if (message.type === "bridge.extract") {
-      const result = await extractTree();
+      const result = await extractTree(message.runtimePluginPacks);
       const response: ContentBridgeResponse<LocalExtractResult> = { ok: true, result };
       sendResponse(response);
       return;
@@ -1107,6 +1126,7 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
 
     if (message.type === "bridge.setValue") {
       const matchContext = createMatchContext();
+      const pluginHost = getPluginHost(message.runtimePluginPacks);
       const selected = await pluginHost.select(matchContext);
       let handledByPlugin = false;
       if (selected) {
@@ -1136,6 +1156,7 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
 
     if (message.type === "bridge.call") {
       const matchContext = createMatchContext();
+      const pluginHost = getPluginHost(message.runtimePluginPacks);
       const selected = await pluginHost.select(matchContext);
       let output: unknown;
       let handledByPlugin = false;

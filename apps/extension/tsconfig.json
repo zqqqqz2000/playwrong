@@ -7,5 +7,5 @@
     { "path": "../../packages/protocol" },
     { "path": "../../packages/plugin-sdk" }
   ],
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }
