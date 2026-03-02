@@ -22,7 +22,7 @@ export interface ExtensionSocketLike {
 interface PendingRpc {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout?: ReturnType<typeof setTimeout>;
 }
 
 const KNOWN_ERROR_CODES: ErrorCode[] = [
@@ -54,16 +54,32 @@ function decodeMessage(message: string | Uint8Array | ArrayBuffer): string {
 
 export interface ExtensionGatewayOptions {
   requestTimeoutMs?: number;
+  connectGracePeriodMs?: number;
 }
 
 export class ExtensionGateway implements ExecutionBridge {
   private socket: ExtensionSocketLike | null = null;
   private pending = new Map<string, PendingRpc>();
+  private connectWaiters = new Set<() => void>();
   private seq = 0;
-  private readonly requestTimeoutMs: number;
+  private readonly requestTimeoutMs: number | null;
+  private readonly connectGracePeriodMs: number;
 
   constructor(options: ExtensionGatewayOptions = {}) {
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 8000;
+    const rawTimeout = options.requestTimeoutMs;
+    if (rawTimeout === undefined || rawTimeout === null) {
+      this.requestTimeoutMs = null;
+    } else {
+      const normalized = Math.trunc(rawTimeout);
+      this.requestTimeoutMs = Number.isFinite(normalized) && normalized > 0 ? normalized : null;
+    }
+    const rawGrace = options.connectGracePeriodMs;
+    if (rawGrace === undefined || rawGrace === null) {
+      this.connectGracePeriodMs = 3000;
+    } else {
+      const normalized = Math.trunc(rawGrace);
+      this.connectGracePeriodMs = Number.isFinite(normalized) && normalized > 0 ? normalized : 0;
+    }
   }
 
   isConnected(): boolean {
@@ -72,6 +88,10 @@ export class ExtensionGateway implements ExecutionBridge {
 
   attach(socket: ExtensionSocketLike): void {
     this.socket = socket;
+    for (const notify of this.connectWaiters) {
+      notify();
+    }
+    this.connectWaiters.clear();
   }
 
   detach(socket?: ExtensionSocketLike): void {
@@ -100,7 +120,9 @@ export class ExtensionGateway implements ExecutionBridge {
       return;
     }
 
-    clearTimeout(pending.timeout);
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+    }
     this.pending.delete(envelope.id);
 
     if (envelope.ok) {
@@ -170,7 +192,13 @@ export class ExtensionGateway implements ExecutionBridge {
     method: M,
     params: ExtensionRpcParamsByMethod[M]
   ): Promise<ExtensionRpcResultByMethod[M]> {
-    const socket = this.socket;
+    let socket = this.socket;
+    if (!socket) {
+      const connected = await this.waitForConnection(this.connectGracePeriodMs);
+      if (connected) {
+        socket = this.socket;
+      }
+    }
     if (!socket) {
       throw new BridgeError("PLUGIN_MISS", "No extension is connected");
     }
@@ -185,12 +213,19 @@ export class ExtensionGateway implements ExecutionBridge {
 
     const payload = JSON.stringify(request);
     const promise = new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new BridgeError("ACTION_FAIL", `Extension request timed out: ${method}`));
-      }, this.requestTimeoutMs);
+      const timeout =
+        this.requestTimeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new BridgeError("ACTION_FAIL", `Extension request timed out: ${method}`));
+            }, this.requestTimeoutMs);
 
-      this.pending.set(id, { resolve, reject, timeout });
+      const pending: PendingRpc = { resolve, reject };
+      if (timeout) {
+        pending.timeout = timeout;
+      }
+      this.pending.set(id, pending);
     });
 
     try {
@@ -219,9 +254,32 @@ export class ExtensionGateway implements ExecutionBridge {
 
   private rejectAllPending(error: BridgeError): void {
     for (const [id, pending] of this.pending.entries()) {
-      clearTimeout(pending.timeout);
+      if (pending.timeout) {
+        clearTimeout(pending.timeout);
+      }
       pending.reject(error);
       this.pending.delete(id);
     }
+  }
+
+  private async waitForConnection(timeoutMs: number): Promise<boolean> {
+    if (this.socket) {
+      return true;
+    }
+    if (timeoutMs <= 0) {
+      return false;
+    }
+    return await new Promise<boolean>((resolve) => {
+      const onAttach = () => {
+        clearTimeout(timer);
+        this.connectWaiters.delete(onAttach);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.connectWaiters.delete(onAttach);
+        resolve(Boolean(this.socket));
+      }, timeoutMs);
+      this.connectWaiters.add(onAttach);
+    });
   }
 }

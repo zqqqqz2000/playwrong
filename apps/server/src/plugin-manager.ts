@@ -1,6 +1,6 @@
-import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { BridgeError } from "@playwrong/protocol";
 
 export interface PluginScopeRule {
@@ -9,10 +9,6 @@ export interface PluginScopeRule {
 }
 
 export interface PluginSkillSpec {
-  path: string;
-}
-
-export interface PluginRuntimeSpec {
   path: string;
 }
 
@@ -25,7 +21,6 @@ export interface PluginPackManifest {
   entry: string;
   match: PluginScopeRule;
   skill: PluginSkillSpec;
-  runtime?: PluginRuntimeSpec;
 }
 
 export interface PluginSourceGit {
@@ -54,7 +49,6 @@ export interface InstalledPluginRecord {
   entry: string;
   match: PluginScopeRule;
   skillPath?: string;
-  runtimePath?: string;
   enabled: boolean;
   source: PluginSource;
   installedAt: string;
@@ -67,7 +61,7 @@ export interface RuntimePluginPack {
   name: string;
   version: string;
   updatedAt: string;
-  runtimeJson: string;
+  moduleCode: string;
 }
 
 interface PluginRegistryFile {
@@ -103,11 +97,6 @@ export interface PluginManagerOptions {
   workspaceRoot?: string;
   playwrongHomeDir?: string;
   pluginsRootDir?: string;
-  generatedFilePath?: string;
-  managedRuntimeModulePath?: string;
-  // Backward compatible alias for managedRuntimeModulePath.
-  generatedBridgeFilePath?: string;
-  extensionBuildCommand?: string[];
 }
 
 interface CommandResult {
@@ -117,9 +106,7 @@ interface CommandResult {
 
 const DEFAULT_REGISTRY_FILE = "registry.json";
 const DEFAULT_INSTALLED_DIR = "installed";
-const PLAYWRONG_HOME_ENV = "PLAYWRONG_HOME";
 const DEFAULT_PLAYWRONG_HOME_DIR = ".config/playwrong";
-const DEFAULT_RUNTIME_MANAGED_PACKAGE_NAME = "@playwrong/runtime-managed-plugins";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -141,15 +128,6 @@ function ensureArrayString(value: unknown, key: string): string[] {
   return parsed;
 }
 
-function ensureFileImportPath(fromDir: string, absPath: string): string {
-  let importPath = relative(fromDir, absPath).replaceAll("\\", "/");
-  if (!importPath.startsWith(".")) {
-    importPath = `./${importPath}`;
-  }
-  importPath = importPath.replace(/\.(ts|tsx)$/, "");
-  return importPath;
-}
-
 function expandHomePath(pathValue: string): string {
   if (pathValue === "~") {
     return homedir();
@@ -164,12 +142,6 @@ function resolvePlaywrongHomeDir(input?: string): string {
   const explicit = typeof input === "string" ? input.trim() : "";
   if (explicit) {
     const resolved = expandHomePath(explicit);
-    return isAbsolute(resolved) ? resolved : join(process.cwd(), resolved);
-  }
-
-  const fromEnv = typeof process.env[PLAYWRONG_HOME_ENV] === "string" ? process.env[PLAYWRONG_HOME_ENV].trim() : "";
-  if (fromEnv) {
-    const resolved = expandHomePath(fromEnv);
     return isAbsolute(resolved) ? resolved : join(process.cwd(), resolved);
   }
 
@@ -283,9 +255,6 @@ export class PluginManager {
   private readonly legacyPluginsRootDir: string;
   private readonly legacyInstalledRootDir: string;
   private readonly legacyRegistryPath: string;
-  private readonly generatedFilePath: string;
-  private readonly managedRuntimeModulePath: string;
-  private readonly extensionBuildCommand: string[];
   private didMigrateLegacyLayout = false;
 
   constructor(options: PluginManagerOptions = {}) {
@@ -297,13 +266,6 @@ export class PluginManager {
     this.legacyPluginsRootDir = join(this.workspaceRoot, "plugins");
     this.legacyInstalledRootDir = join(this.legacyPluginsRootDir, DEFAULT_INSTALLED_DIR);
     this.legacyRegistryPath = join(this.legacyPluginsRootDir, DEFAULT_REGISTRY_FILE);
-    this.generatedFilePath = options.generatedFilePath ?? join(this.playwrongHomeDir, "generated", "managed-plugins.generated.ts");
-    this.managedRuntimeModulePath =
-      options.managedRuntimeModulePath ??
-      options.generatedBridgeFilePath ??
-      join(this.workspaceRoot, "node_modules/@playwrong/runtime-managed-plugins/index.ts");
-    this.extensionBuildCommand =
-      options.extensionBuildCommand ?? ["bun", "run", "--cwd", join(this.workspaceRoot, "apps/extension"), "build"];
   }
 
   async listPlugins(): Promise<InstalledPluginRecord[]> {
@@ -316,25 +278,18 @@ export class PluginManager {
 
   async listEnabledRuntimePluginPacks(): Promise<RuntimePluginPack[]> {
     const registry = await this.readRegistry();
-    const enabledWithRuntime = registry.plugins
-      .filter((plugin) => plugin.enabled && typeof plugin.runtimePath === "string" && plugin.runtimePath.length > 0)
-      .sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+    const enabledPlugins = registry.plugins.filter((plugin) => plugin.enabled).sort((a, b) => a.pluginId.localeCompare(b.pluginId));
 
     const packs: RuntimePluginPack[] = [];
-    for (const plugin of enabledWithRuntime) {
-      const runtimeRelPath = plugin.runtimePath;
-      if (!runtimeRelPath) {
-        continue;
-      }
-      const runtimeAbsPath = join(this.installedRootDir, plugin.dirName, runtimeRelPath);
-      await this.assertFileExists(runtimeAbsPath, `runtime.path not found for plugin ${plugin.pluginId}`);
-      const runtimeJson = await readFile(runtimeAbsPath, "utf8");
+    for (const plugin of enabledPlugins) {
+      const modulePath = await this.ensureCompiledRuntimeModule(plugin);
+      const moduleCode = await readFile(modulePath, "utf8");
       packs.push({
         pluginId: plugin.pluginId,
         name: plugin.name,
         version: plugin.version,
         updatedAt: plugin.updatedAt,
-        runtimeJson
+        moduleCode
       });
     }
     return packs;
@@ -503,7 +458,9 @@ export class PluginManager {
     existing.enabled = enabled;
     existing.updatedAt = nowIso();
     await this.writeRegistry(registry);
-    await this.generateManagedPluginsFile();
+    if (enabled) {
+      await this.compilePluginEntry(existing);
+    }
     return { ...existing };
   }
 
@@ -523,75 +480,14 @@ export class PluginManager {
 
     registry.plugins = registry.plugins.filter((plugin) => plugin.pluginId !== pluginId);
     await this.writeRegistry(registry);
-    await this.generateManagedPluginsFile();
   }
 
   async generateManagedPluginsFile(): Promise<{ outputPath: string; pluginCount: number; enabledCount: number }> {
     await this.ensureBaseDirs();
-
     const registry = await this.readRegistry();
-    const outputDir = dirname(this.generatedFilePath);
-    await mkdir(outputDir, { recursive: true });
-
     const enabledPlugins = registry.plugins.filter((plugin) => plugin.enabled);
-    const importLines: string[] = [];
-    const moduleVarNames: string[] = [];
-
-    for (const [i, plugin] of enabledPlugins.entries()) {
-      const entryAbsPath = await this.resolvePluginEntryPath(plugin);
-      const modulePath = ensureFileImportPath(outputDir, entryAbsPath);
-      const moduleVar = `pluginModule${i}`;
-      importLines.push(`import * as ${moduleVar} from "${modulePath}";`);
-      moduleVarNames.push(moduleVar);
-    }
-
-    const moduleListLiteral = moduleVarNames.join(", ");
-    const content = [
-      "/* eslint-disable */",
-      "// AUTO-GENERATED FILE. DO NOT EDIT.",
-      "// Generated by PluginManager.generateManagedPluginsFile().",
-      'import type { PluginScript } from "@playwrong/plugin-sdk";',
-      importLines.join("\n"),
-      "",
-      "type PluginModuleLike = { pluginScripts?: PluginScript[]; default?: PluginScript[] };",
-      "",
-      "function normalizePluginScripts(input: unknown, moduleIndex: number): PluginScript[] {",
-      "  const candidate = input as PluginModuleLike;",
-      "  const scripts = Array.isArray(candidate.pluginScripts)",
-      "    ? candidate.pluginScripts",
-      "    : Array.isArray(candidate.default)",
-      "      ? candidate.default",
-      "      : [];",
-      "  return scripts.map((script, index) => ({",
-      "    ...script,",
-      "    scriptId: script.scriptId || `managed.plugin.${moduleIndex + 1}.${index + 1}`",
-      "  }));",
-      "}",
-      "",
-      `const managedPluginModules: PluginModuleLike[] = [${moduleListLiteral}];`,
-      "",
-      "export const managedPluginScripts: PluginScript[] = managedPluginModules.flatMap((entry, moduleIndex) =>",
-      "  normalizePluginScripts(entry, moduleIndex)",
-      ");",
-      "",
-      "export const managedPluginInfo = {",
-      "  moduleCount: managedPluginModules.length,",
-      "  scriptCount: managedPluginScripts.length",
-      "};",
-      "",
-      "export const managedPluginModuleCount = managedPluginModules.length;",
-      "",
-      "export const managedPluginScriptCount = managedPluginScripts.length;",
-      "",
-      ""
-    ]
-      .filter((line) => line !== undefined)
-      .join("\n");
-
-    await writeFile(this.generatedFilePath, content, "utf8");
-    await this.writeManagedRuntimeModule();
     return {
-      outputPath: this.generatedFilePath,
+      outputPath: this.registryPath,
       pluginCount: registry.plugins.length,
       enabledCount: enabledPlugins.length
     };
@@ -602,7 +498,17 @@ export class PluginManager {
     build: CommandResult;
   }> {
     const generated = await this.generateManagedPluginsFile();
-    const build = await this.runCommand(this.extensionBuildCommand, this.workspaceRoot);
+    const registry = await this.readRegistry();
+    const enabledPlugins = registry.plugins.filter((plugin) => plugin.enabled);
+    let compiledCount = 0;
+    for (const plugin of enabledPlugins) {
+      await this.compilePluginEntry(plugin);
+      compiledCount += 1;
+    }
+    const build: CommandResult = {
+      stdout: `runtime-only mode: extension rebuild skipped, compiled runtime modules=${compiledCount}\n`,
+      stderr: ""
+    };
     return { generated, build };
   }
 
@@ -615,6 +521,67 @@ export class PluginManager {
       return pathValue;
     }
     return join(this.workspaceRoot, pathValue);
+  }
+
+  private runtimeModuleRelPath(): string {
+    return ".playwrong/runtime-plugin.mjs";
+  }
+
+  private resolveRuntimeModulePath(plugin: InstalledPluginRecord): string {
+    return join(this.installedRootDir, plugin.dirName, this.runtimeModuleRelPath());
+  }
+
+  private async ensureCompiledRuntimeModule(plugin: InstalledPluginRecord): Promise<string> {
+    const runtimeModulePath = this.resolveRuntimeModulePath(plugin);
+    if (await pathExists(runtimeModulePath)) {
+      return runtimeModulePath;
+    }
+    await this.compilePluginEntry(plugin);
+    return runtimeModulePath;
+  }
+
+  private async compilePluginEntry(plugin: InstalledPluginRecord): Promise<void> {
+    const pluginRoot = join(this.installedRootDir, plugin.dirName);
+    const entryPath = join(pluginRoot, plugin.entry);
+    await this.assertFileExists(entryPath, `entry not found for plugin ${plugin.pluginId}`);
+    await this.ensurePluginNodeModules(pluginRoot);
+
+    const runtimeModulePath = this.resolveRuntimeModulePath(plugin);
+    await mkdir(dirname(runtimeModulePath), { recursive: true });
+
+    try {
+      await this.runCommand(
+        ["bun", "build", entryPath, "--bundle", "--target=browser", "--format=esm", "--outfile", runtimeModulePath],
+        pluginRoot
+      );
+    } catch (error) {
+      if (error instanceof BridgeError) {
+        throw error;
+      }
+      throw new BridgeError("ACTION_FAIL", `Failed to compile plugin entry for ${plugin.pluginId}`, {
+        pluginId: plugin.pluginId,
+        entry: plugin.entry,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  private async ensurePluginNodeModules(pluginRoot: string): Promise<void> {
+    const pluginNodeModulesPath = join(pluginRoot, "node_modules");
+    if (await pathExists(pluginNodeModulesPath)) {
+      return;
+    }
+
+    const workspaceNodeModulesPath = join(this.workspaceRoot, "node_modules");
+    if (!(await pathExists(workspaceNodeModulesPath))) {
+      return;
+    }
+
+    try {
+      await symlink(workspaceNodeModulesPath, pluginNodeModulesPath, "dir");
+    } catch {
+      // Best effort only; plugin may still compile if it has no runtime package imports.
+    }
   }
 
   private async findPluginRoot(extractDir: string): Promise<string> {
@@ -674,16 +641,10 @@ export class PluginManager {
       enabled: input.enabled,
       source: input.source
     });
-
-    await this.generateManagedPluginsFile();
+    if (next.enabled) {
+      await this.compilePluginEntry(next);
+    }
     return next;
-  }
-
-  private async resolvePluginEntryPath(plugin: InstalledPluginRecord): Promise<string> {
-    const rootDir = join(this.installedRootDir, plugin.dirName);
-    const entryPath = join(rootDir, plugin.entry);
-    await this.assertFileExists(entryPath, `entry not found for plugin ${plugin.pluginId}`);
-    return entryPath;
   }
 
   private async upsertRecordFromManifest(
@@ -710,9 +671,6 @@ export class PluginManager {
     if (manifest.description !== undefined) {
       record.description = manifest.description;
     }
-    if (manifest.runtime?.path) {
-      record.runtimePath = manifest.runtime.path;
-    }
 
     const nextPlugins = registry.plugins.filter((plugin) => plugin.pluginId !== manifest.pluginId);
     nextPlugins.push(record);
@@ -734,10 +692,33 @@ export class PluginManager {
           registryPath: this.registryPath
         });
       }
-      const normalizedPlugins = parsed.plugins.map((plugin) => ({
-        ...plugin,
-        ...(plugin.skillPath ? { skillPath: plugin.skillPath } : {})
-      }));
+      const normalizedPlugins = parsed.plugins
+        .map((plugin) => {
+          const entry = typeof plugin.entry === "string" && plugin.entry.trim().length > 0 ? plugin.entry.trim() : undefined;
+          if (!entry) {
+            return null;
+          }
+          const normalized: InstalledPluginRecord = {
+            pluginId: plugin.pluginId,
+            name: plugin.name,
+            version: plugin.version,
+            entry,
+            match: plugin.match,
+            enabled: plugin.enabled === true,
+            source: plugin.source,
+            installedAt: plugin.installedAt,
+            updatedAt: plugin.updatedAt,
+            dirName: plugin.dirName
+          };
+          if (plugin.description) {
+            normalized.description = plugin.description;
+          }
+          if (plugin.skillPath) {
+            normalized.skillPath = plugin.skillPath;
+          }
+          return normalized;
+        })
+        .filter((plugin): plugin is InstalledPluginRecord => plugin !== null);
       const registry: PluginRegistryFile = {
         version: 1,
         plugins: normalizedPlugins
@@ -764,7 +745,7 @@ export class PluginManager {
     await this.assertFileExists(manifestPath, "Missing playwrong.plugin.json in plugin repository");
 
     const raw = await readFile(manifestPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<PluginPackManifest>;
+    const parsed = JSON.parse(raw) as Partial<PluginPackManifest> & { runtime?: unknown };
 
     if (parsed.schemaVersion !== 1) {
       throw new BridgeError("INVALID_REQUEST", "Unsupported plugin schemaVersion", {
@@ -818,25 +799,10 @@ export class PluginManager {
       });
     }
 
-    let runtimePath: string | undefined;
     if (parsed.runtime !== undefined) {
-      if (!parsed.runtime || typeof parsed.runtime !== "object") {
-        throw new BridgeError("INVALID_REQUEST", "runtime must be an object when provided", {
-          manifestPath
-        });
-      }
-      const runtime = parsed.runtime as Partial<PluginRuntimeSpec>;
-      if (!runtime.path || typeof runtime.path !== "string") {
-        throw new BridgeError("INVALID_REQUEST", "runtime.path must be a string when runtime is provided", {
-          manifestPath
-        });
-      }
-      if (!isSafeRelativePath(runtime.path)) {
-        throw new BridgeError("INVALID_REQUEST", "runtime.path must be a safe relative path", {
-          runtimePath: runtime.path
-        });
-      }
-      runtimePath = runtime.path;
+      throw new BridgeError("INVALID_REQUEST", "runtime field is no longer supported; use entry for runtime-loaded plugins", {
+        manifestPath
+      });
     }
 
     if (!parsed.match || typeof parsed.match !== "object") {
@@ -870,18 +836,6 @@ export class PluginManager {
     await this.assertFileExists(skillPath, `Plugin skill not found: ${parsed.skill.path}`);
     const skillContent = await readFile(skillPath, "utf8");
     validatePluginSkillContent(skillContent, parsed.skill.path);
-    if (runtimePath) {
-      const runtimeFilePath = join(pluginRootDir, runtimePath);
-      await this.assertFileExists(runtimeFilePath, `Plugin runtime file not found: ${runtimePath}`);
-      try {
-        JSON.parse(await readFile(runtimeFilePath, "utf8"));
-      } catch (error) {
-        throw new BridgeError("INVALID_REQUEST", "runtime.path must point to valid JSON", {
-          runtimePath,
-          reason: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
 
     const manifest: PluginPackManifest = {
       schemaVersion: 1,
@@ -900,11 +854,6 @@ export class PluginManager {
     if (parsed.description && typeof parsed.description === "string") {
       manifest.description = parsed.description;
     }
-    if (runtimePath) {
-      manifest.runtime = {
-        path: runtimePath
-      };
-    }
 
     return manifest;
   }
@@ -921,29 +870,6 @@ export class PluginManager {
     await this.migrateLegacyWorkspaceLayout();
     await mkdir(this.pluginsRootDir, { recursive: true });
     await mkdir(this.installedRootDir, { recursive: true });
-  }
-
-  private async writeManagedRuntimeModule(): Promise<void> {
-    const moduleDir = dirname(this.managedRuntimeModulePath);
-    await mkdir(moduleDir, { recursive: true });
-    const importPath = ensureFileImportPath(moduleDir, this.generatedFilePath);
-    const content = [
-      "/* eslint-disable */",
-      "// AUTO-GENERATED FILE. DO NOT EDIT.",
-      "// Generated by PluginManager.generateManagedPluginsFile().",
-      `export { managedPluginScripts, managedPluginInfo, managedPluginModuleCount, managedPluginScriptCount } from ${JSON.stringify(importPath)};`,
-      ""
-    ].join("\n");
-    await writeFile(this.managedRuntimeModulePath, content, "utf8");
-
-    const packageJsonPath = join(moduleDir, "package.json");
-    const packageJson = {
-      name: DEFAULT_RUNTIME_MANAGED_PACKAGE_NAME,
-      private: true,
-      type: "module",
-      main: "./index.ts"
-    };
-    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
   }
 
   private async migrateLegacyWorkspaceLayout(): Promise<void> {

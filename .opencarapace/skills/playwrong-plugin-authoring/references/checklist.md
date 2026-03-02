@@ -5,7 +5,7 @@
 - Verify `mapping-plugins list` can discover plugin state.
 - Verify `mapping-plugins install` installs from git and updates registry.
 - Verify `mapping-plugins enable` and `mapping-plugins disable` toggle enabled status.
-- Verify `mapping-plugins reload` regenerates managed scripts and rebuilds extension artifacts.
+- Verify `mapping-plugins reload` recompiles enabled plugin entries for runtime delivery without rebuilding extension artifacts.
 - Verify `mapping-plugins reload --reload-extension true --page <PAGE_ID>` can complete without manual browser operations.
 - Verify `mapping-plugins uninstall` removes plugin directory and registry entry.
 

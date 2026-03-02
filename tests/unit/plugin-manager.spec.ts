@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginManager } from "../../apps/server/src/plugin-manager";
@@ -24,51 +24,41 @@ async function createTempWorkspace(): Promise<string> {
 function createManager(workspace: string): PluginManager {
   return new PluginManager({
     workspaceRoot: workspace,
-    playwrongHomeDir: join(workspace, ".playwrong-home"),
-    generatedFilePath: join(workspace, "generated", "managed-plugins.generated.ts"),
-    generatedBridgeFilePath: join(workspace, "bridge", "managed-plugins.generated.ts")
+    playwrongHomeDir: join(workspace, ".playwrong-home")
   });
 }
 
 async function createPluginDir(
   root: string,
-  input: { pluginId: string; hosts: string[]; dirName?: string; runtimeScriptId?: string }
+  input: { pluginId: string; hosts: string[]; dirName?: string; scriptId?: string }
 ): Promise<string> {
   const repoDir = join(root, input.dirName ?? "plugin-repo");
+  await mkdir(repoDir, { recursive: true });
   await mkdir(join(repoDir, "src"), { recursive: true });
 
-  const runtimeConfig = input.runtimeScriptId
-    ? {
-        runtime: { path: "runtime-plugin.json" }
-      }
-    : {};
+  const scriptId = input.scriptId ?? `${input.pluginId}.script`;
+  const manifest: Record<string, unknown> = {
+    schemaVersion: 1,
+    pluginId: input.pluginId,
+    name: "Test Plugin",
+    version: "0.1.0",
+    entry: "src/index.ts",
+    skill: { path: "SKILL.md" },
+    match: { hosts: input.hosts }
+  };
 
   await writeFile(
     join(repoDir, "playwrong.plugin.json"),
-    JSON.stringify(
-      {
-        schemaVersion: 1,
-        pluginId: input.pluginId,
-        name: "Test Plugin",
-        version: "0.1.0",
-        entry: "src/index.ts",
-        skill: { path: "SKILL.md" },
-        match: { hosts: input.hosts },
-        ...runtimeConfig
-      },
-      null,
-      2
-    ),
+    JSON.stringify(manifest, null, 2),
     "utf8"
   );
-
   await writeFile(
     join(repoDir, "src/index.ts"),
     [
       'import type { PluginScript } from "@playwrong/plugin-sdk";',
       "export const pluginScripts: PluginScript[] = [",
       "  {",
-      `    scriptId: ${JSON.stringify(`${input.pluginId}.script`)},`,
+      `    scriptId: ${JSON.stringify(scriptId)},`,
       "    async extract() {",
       "      throw new Error(\"PLUGIN_MISS\");",
       "    },",
@@ -111,34 +101,6 @@ async function createPluginDir(
     "utf8"
   );
 
-  if (input.runtimeScriptId) {
-    await writeFile(
-      join(repoDir, "runtime-plugin.json"),
-      JSON.stringify(
-        {
-          scripts: [
-            {
-              scriptId: input.runtimeScriptId,
-              rules: [{ hosts: input.hosts }],
-              extract: {
-                pageType: "runtime.test",
-                fields: [
-                  {
-                    id: "runtime.title",
-                    select: { selector: "title" }
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
-  }
-
   return repoDir;
 }
 
@@ -180,11 +142,6 @@ describe("PluginManager", () => {
     expect(generated.pluginCount).toBe(1);
     expect(generated.enabledCount).toBe(0);
 
-    const generatedContent = await readFile(join(workspace, "generated", "managed-plugins.generated.ts"), "utf8");
-    expect(generatedContent).toContain("managedPluginModules");
-    expect(generatedContent).not.toContain("example.local.plugin");
-    expect(generatedContent).not.toContain("example.com");
-
     await manager.uninstallPlugin("example.local.plugin");
     const listed3 = await manager.listPlugins();
     expect(listed3).toHaveLength(0);
@@ -216,7 +173,7 @@ describe("PluginManager", () => {
       pluginId: "example.runtime.plugin",
       hosts: ["example.com"],
       dirName: "runtime-plugin-dir",
-      runtimeScriptId: "example.runtime.script"
+      scriptId: "example.runtime.script"
     });
 
     const manager = createManager(workspace);
@@ -225,7 +182,7 @@ describe("PluginManager", () => {
     const runtimePacks = await manager.listEnabledRuntimePluginPacks();
     expect(runtimePacks).toHaveLength(1);
     expect(runtimePacks[0]?.pluginId).toBe("example.runtime.plugin");
-    expect(runtimePacks[0]?.runtimeJson).toContain("example.runtime.script");
+    expect(runtimePacks[0]?.moduleCode).toContain("example.runtime.script");
   });
 
   it("installs plugin from a zip archive path", async () => {
@@ -374,6 +331,41 @@ describe("PluginManager", () => {
     );
     await Bun.$`git add playwrong.plugin.json`.cwd(repoDir).quiet();
     await Bun.$`git commit -m update-manifest-host-pattern`.cwd(repoDir).quiet();
+
+    const manager = createManager(workspace);
+    await expect(manager.installFromGit({ repoUrl: repoDir })).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+  });
+
+  it("rejects deprecated runtime field in manifest", async () => {
+    const workspace = await createTempWorkspace();
+    const repoDir = await createGitPluginRepo(workspace, {
+      pluginId: "example.deprecated.runtime.field",
+      hosts: ["example.com"]
+    });
+
+    await writeFile(
+      join(repoDir, "playwrong.plugin.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          pluginId: "example.deprecated.runtime.field",
+          name: "Deprecated Runtime Field",
+          version: "0.1.0",
+          entry: "src/index.ts",
+          runtime: { path: "runtime-plugin.json" },
+          skill: { path: "SKILL.md" },
+          match: { hosts: ["example.com"] }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(join(repoDir, "runtime-plugin.json"), JSON.stringify({ scripts: [] }, null, 2), "utf8");
+    await Bun.$`git add playwrong.plugin.json runtime-plugin.json`.cwd(repoDir).quiet();
+    await Bun.$`git commit -m add-runtime-field`.cwd(repoDir).quiet();
 
     const manager = createManager(workspace);
     await expect(manager.installFromGit({ repoUrl: repoDir })).rejects.toMatchObject({

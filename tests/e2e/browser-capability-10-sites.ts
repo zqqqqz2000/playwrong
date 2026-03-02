@@ -1,13 +1,17 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { startBridgeHttpServer } from "../../apps/server/src/http";
 import type {
   PullResponse,
   RemotePageInfo,
   SemanticNode,
   UpsertSnapshotRequest
 } from "../../packages/protocol/src/index";
+import {
+  configureExtensionBridgeEndpoint,
+  httpBaseToWsUrl,
+  startIsolatedBridgeServer
+} from "./support/isolated-bridge";
 
 interface SearchBehavior {
   kind: "search";
@@ -57,7 +61,7 @@ const ROOT = process.env.PLAYWRONG_E2E_ROOT || resolve(join(import.meta.dir, "..
 const EXTENSION_DIST = join(ROOT, "apps/extension/dist");
 const USER_DATA_DIR = join(ROOT, "tmp/e2e/capability-10-sites-user-data");
 const REPORT_DIR = join(ROOT, "tmp/e2e/capability-10-sites");
-const DEFAULT_ENDPOINT = "http://127.0.0.1:7878";
+const EXTERNAL_ENDPOINT = process.env.PLAYWRONG_E2E_ENDPOINT?.trim();
 const HEADLESS = !["0", "false", "no"].includes((process.env.PLAYWRONG_E2E_HEADLESS ?? "1").toLowerCase());
 
 const SEARCH_QUERY = "playwrong llm automation";
@@ -87,7 +91,7 @@ const SITE_CASES: SiteCase[] = [
   {
     id: "github",
     url: "https://github.com/",
-    allowedPageTypes: ["github.repo.new", "github.login", "github.page"],
+    allowedPageTypes: ["index", "github.repo.new", "github.login", "github.page"],
     behaviors: [{ kind: "refresh" }]
   },
   {
@@ -596,19 +600,20 @@ async function main(): Promise<void> {
   await mkdir(USER_DATA_DIR, { recursive: true });
   await mkdir(REPORT_DIR, { recursive: true });
 
-  let bridgeStarted: ReturnType<typeof startBridgeHttpServer> | null = null;
-  let useExternalServer = false;
-
-  try {
-    bridgeStarted = startBridgeHttpServer({ host: "127.0.0.1", port: 7878 });
-  } catch {
-    const health = await fetch(new URL("/health", DEFAULT_ENDPOINT)).catch(() => null);
+  let bridgeBaseUrl = EXTERNAL_ENDPOINT ?? "";
+  let bridgeWsUrl = "";
+  const isolatedBridge = EXTERNAL_ENDPOINT ? null : await startIsolatedBridgeServer("127.0.0.1");
+  if (isolatedBridge) {
+    bridgeBaseUrl = isolatedBridge.baseUrl;
+    bridgeWsUrl = isolatedBridge.wsUrl;
+  } else {
+    const health = await fetch(new URL("/health", bridgeBaseUrl)).catch(() => null);
     if (!health || !health.ok) {
-      throw new Error("Cannot start bridge server at 127.0.0.1:7878 and no external server found");
+      throw new Error(`Cannot use external bridge server at ${bridgeBaseUrl}`);
     }
-    useExternalServer = true;
+    bridgeWsUrl = httpBaseToWsUrl(bridgeBaseUrl);
   }
-  const baseUrl = DEFAULT_ENDPOINT;
+  const baseUrl = bridgeBaseUrl;
 
   const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     channel: "chromium",
@@ -626,6 +631,7 @@ async function main(): Promise<void> {
   const page = context.pages()[0] ?? (await context.newPage());
 
   try {
+    await configureExtensionBridgeEndpoint(context, bridgeWsUrl);
     await waitExtensionConnected(baseUrl);
 
     const results: SiteResult[] = [];
@@ -676,9 +682,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await context.close();
-    if (!useExternalServer && bridgeStarted) {
-      bridgeStarted.server.stop(true);
-    }
+    isolatedBridge?.stop();
   }
 }
 

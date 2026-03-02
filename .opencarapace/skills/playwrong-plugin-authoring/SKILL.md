@@ -28,7 +28,6 @@ bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
 bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
 bun apps/cli/src/index.ts mapping-plugins enable --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
 bun apps/cli/src/index.ts mapping-plugins disable --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
-bun apps/cli/src/index.ts mapping-plugins generate --endpoint http://127.0.0.1:7878
 bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
 bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id <PLUGIN_ID>
 ```
@@ -41,9 +40,9 @@ Mapping plugin runtime storage isolation:
 - Registry and installed plugin code live under `${PLAYWRONG_HOME}/plugins` (or `~/.config/playwrong/plugins` when env is unset).
 - Installed plugin directory uses `pluginId` directly under `${PLAYWRONG_HOME}/plugins/installed/`.
 - Do not rely on `playwrong/plugins/registry.json` as runtime source of truth.
-- For immutable packaged extension delivery, prefer declarative runtime plugins via `runtime.path`; extension reads them dynamically from `/mapping-plugins/runtime` without rebuild.
+- Runtime loading uses plugin `entry` (TS/JS). Server compiles `entry` with `bun build` and serves module code via `/mapping-plugins/runtime`.
 
-`reload` regenerates managed mapping scripts and rebuilds extension artifacts.
+`reload` recompiles enabled plugin entries for runtime delivery; extension rebuild is not required.
 
 Recommended hot-reload command when validating a live tab:
 
@@ -62,8 +61,7 @@ For each new plugin, always create or update these files:
 1. `plugins/examples/<plugin-id>/playwrong.plugin.json`
 2. `plugins/examples/<plugin-id>/SKILL.md`
 3. `plugins/examples/<plugin-id>/src/index.ts`
-4. Extension wiring (managed or local user scripts)
-5. Tests (unit and/or e2e) that prove plugin is actually used
+4. Tests (unit and/or e2e) that prove plugin is actually used
 
 ## Implementation Flow
 
@@ -71,7 +69,7 @@ For each new plugin, always create or update these files:
 - Follow [`plugins/PLUGIN_SPEC.md`](../../../plugins/PLUGIN_SPEC.md).
 - Keep `pluginId` lowercase and `version` semver-style.
 - Keep runtime matching self-contained in plugin scripts (`script.rules`). Do not depend on core repo generated files to inject manifest `match` rules.
-- If target environment cannot rebuild extension, add `runtime.path` JSON and validate behavior through runtime endpoint instead of relying on `mapping-plugins reload`.
+- Plugin runtime delivery always comes from compiling `entry`; do not add declarative `runtime.path` in manifest.
 
 2. Implement `extract` first.
 - Emit nested semantic tree with stable ids.

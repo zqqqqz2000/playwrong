@@ -8,6 +8,7 @@ import {
   type UpsertSnapshotRequest
 } from "@playwrong/protocol";
 import { BridgeCore, type ExecutionBridge } from "./core";
+import { loadServerRuntimeConfig } from "./config";
 import { ExtensionGateway } from "./extension-gateway";
 import { PluginManager } from "./plugin-manager";
 
@@ -75,7 +76,17 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
   extensionGateway: ExtensionGateway;
 } {
   const core = options.core ?? new BridgeCore();
-  const extensionGateway = options.extensionGateway ?? new ExtensionGateway();
+  const runtimeConfig = loadServerRuntimeConfig();
+  const requestTimeoutMs = runtimeConfig.requestTimeoutMs;
+  const connectGracePeriodMs = runtimeConfig.connectGracePeriodMs;
+  const gatewayOptions: { requestTimeoutMs?: number; connectGracePeriodMs?: number } = {};
+  if (requestTimeoutMs !== undefined) {
+    gatewayOptions.requestTimeoutMs = requestTimeoutMs;
+  }
+  if (connectGracePeriodMs !== undefined) {
+    gatewayOptions.connectGracePeriodMs = connectGracePeriodMs;
+  }
+  const extensionGateway = options.extensionGateway ?? new ExtensionGateway(gatewayOptions);
   const pluginManager = options.pluginManager ?? new PluginManager();
   const executor = options.executor ?? extensionGateway;
   const host = options.host ?? "127.0.0.1";

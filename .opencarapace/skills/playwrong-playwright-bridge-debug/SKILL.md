@@ -50,7 +50,7 @@ bun apps/cli/src/index.ts sync --endpoint http://127.0.0.1:7878 --page <PAGE_ID>
 ```bash
 bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page <PAGE_ID> --state-dir <DIR>
 ```
-- Safe plugin rebuild + reload + target page refresh:
+- Safe plugin runtime-module recompile + reload + target page refresh:
 ```bash
 bun apps/cli/src/index.ts mapping-plugins reload \
   --endpoint http://127.0.0.1:7878 \

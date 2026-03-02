@@ -135,8 +135,6 @@ Runtime storage isolation for mapping plugins:
 - Runtime files:
   - registry: `${PLAYWRONG_HOME}/plugins/registry.json`
   - installed plugins: `${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
-  - managed plugin source list: `${PLAYWRONG_HOME}/generated/managed-plugins.generated.ts`
-  - runtime bridge module: `node_modules/@playwrong/runtime-managed-plugins/index.ts` (generated, not committed)
 
 Required manifest fields
 
@@ -144,16 +142,14 @@ Required manifest fields
 - `pluginId` unique plugin id
 - `name` display name
 - `version` semantic version
-- `entry` relative TypeScript entry path
+- `entry` relative TypeScript/JavaScript entry path
 - `skill.path` relative skill document path
 - `match.hosts` host matching rule
 - `match.paths` path matching rule
 
-Optional runtime-only field for immutable packaged extension:
-
-- `runtime.path` relative JSON path for declarative runtime scripts.
-- Runtime scripts are read from `/mapping-plugins/runtime` by extension at request time.
-- This path allows dynamic plugin install/enable/disable without rebuilding extension bundle.
+Runtime plugin modules are read from `/mapping-plugins/runtime` by extension at request time.
+Server compiles each enabled plugin `entry` to a bundled JS module (via `bun build`) and delivers module code dynamically.
+Dynamic plugin install/enable/disable does not require extension rebuild.
 
 Skill document pointed by `skill.path` must include the following sections.
 
@@ -161,18 +157,7 @@ Skill document pointed by `skill.path` must include the following sections.
 - `Operations` or `Functions`
 - `Failure Modes`
 
-Export contract in plugin entry
-
-- `export const pluginScripts`
-- `export default`
-
 If current page is unsupported, throw `new Error` with value `PLUGIN_MISS`.
-
-Generate managed plugin registry
-
-```bash
-bun run plugins:generate
-```
 
 Specification document: `plugins/PLUGIN_SPEC.md`.
 
@@ -190,7 +175,7 @@ Install mapping plugin from git
 bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
 ```
 
-Inspect enabled runtime packs (declarative plugins for immutable extension package)
+Inspect enabled runtime packs
 
 ```bash
 curl -s http://127.0.0.1:7878/mapping-plugins/runtime | jq
@@ -209,14 +194,13 @@ Uninstall mapping plugin
 bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id example.http.plugin
 ```
 
-Reload mapping plugin build
+Reload mapping plugin runtime modules
 
 ```bash
 bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
 ```
 
-`reload` regenerates managed mapping scripts and rebuilds extension artifacts.
-For immutable packaged distribution, prefer runtime plugin packs (`runtime.path`) so rebuild is not required.
+`reload` recompiles enabled plugin entries into runtime modules; extension rebuild is skipped.
 
 Use skill `.opencarapace/skills/playwrong-plugin-authoring` to guide mapping plugin implementation and validation with this command set.
 
@@ -480,8 +464,6 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 - 运行态路径：
   - registry：`${PLAYWRONG_HOME}/plugins/registry.json`
   - 已安装插件：`${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
-  - 托管插件清单：`${PLAYWRONG_HOME}/generated/managed-plugins.generated.ts`
-  - 运行时桥接模块：`node_modules/@playwrong/runtime-managed-plugins/index.ts`（生成文件，不入库）
 
 关键字段
 
@@ -494,11 +476,9 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 - `match.hosts`
 - `match.paths`
 
-可选运行时字段（面向打包后不可改代码场景）：
-
-- `runtime.path`：声明式运行时脚本 JSON 的相对路径。
-- extension 会在请求时通过 `/mapping-plugins/runtime` 动态读取。
-- 使用 `runtime.path` 后，安装/启停插件无需重打包 extension。
+extension 会在请求时通过 `/mapping-plugins/runtime` 动态读取插件运行时模块。
+server 会把每个启用插件的 `entry` 用 `bun build` 编译为 JS bundle，并以 runtime 方式下发。
+安装/启停插件无需重打包 extension。
 
 `skill.path` 指向的文档必须包含以下章节。
 
@@ -512,12 +492,6 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 - `export default`
 
 当页面不匹配时，返回 `PLUGIN_MISS` 错误。
-
-生成托管插件注册文件
-
-```bash
-bun run plugins:generate
-```
 
 完整规范见 `plugins/PLUGIN_SPEC.md`。
 
@@ -535,7 +509,7 @@ bun apps/cli/src/index.ts mapping-plugins list --endpoint http://127.0.0.1:7878
 bun apps/cli/src/index.ts mapping-plugins install --endpoint http://127.0.0.1:7878 --repo-url <GIT_URL> --enabled true
 ```
 
-查看已启用 runtime packs（适用于不可重打包 extension）
+查看已启用 runtime packs
 
 ```bash
 curl -s http://127.0.0.1:7878/mapping-plugins/runtime | jq
@@ -554,13 +528,13 @@ bun apps/cli/src/index.ts mapping-plugins disable --endpoint http://127.0.0.1:78
 bun apps/cli/src/index.ts mapping-plugins uninstall --endpoint http://127.0.0.1:7878 --id example.http.plugin
 ```
 
-重载映射插件构建
+重载映射插件运行时模块
 
 ```bash
 bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:7878
 ```
 
-`reload` 会重新生成托管映射脚本并重建扩展产物。
+`reload` 会重新编译已启用插件 entry 到运行时模块，不重建扩展。
 
 建议使用 `.opencarapace/skills/playwrong-plugin-authoring` 作为映射插件编写与验证流程的统一指导。
 

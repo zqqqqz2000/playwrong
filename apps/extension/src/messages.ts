@@ -5,7 +5,7 @@ export interface RuntimePluginPackPayload {
   name: string;
   version: string;
   updatedAt: string;
-  runtimeJson: string;
+  moduleCode: string;
 }
 
 export type ContentBridgeRequest =

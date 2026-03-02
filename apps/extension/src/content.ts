@@ -1,6 +1,7 @@
 import { matchHostPattern, matchPathPattern } from "@playwrong/plugin-sdk";
 import type {
   MatchContext,
+  PluginScript,
   StabilityPolicy,
   StabilitySnapshot
 } from "@playwrong/plugin-sdk";
@@ -19,7 +20,6 @@ import type {
   RuntimePluginPackPayload
 } from "./messages";
 import { ExtensionPluginHost, type SelectedPluginScript } from "./plugin-host";
-import { buildRuntimeManagedPluginScripts } from "./runtime-managed-plugins";
 import { createBuiltinSiteScripts } from "./site-scripts";
 import { userPluginScripts, userSimpleStabilityRules, type UserSimpleStabilityRule } from "./user-scripts";
 
@@ -39,6 +39,7 @@ const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
 
 const basePluginScripts = [...createBuiltinSiteScripts(), ...userPluginScripts];
 const basePluginHost = new ExtensionPluginHost(basePluginScripts);
+const runtimePluginScriptCache = new Map<string, PluginScript[]>();
 let latestTree: SemanticNode[] = [];
 
 const DEFAULT_STABILITY_POLICY: Required<StabilityPolicy> = {
@@ -51,9 +52,13 @@ const DEFAULT_STABILITY_POLICY: Required<StabilityPolicy> = {
 
 const STABLE_MUTATION_WINDOW_MS = 500;
 const MAX_STABILITY_HISTORY = 60;
+const CONTENT_BRIDGE_READY_FLAG = "__playwrongContentBridgeReady";
 
 let pendingRequests = 0;
 const mutationTimestamps: number[] = [];
+const activeNetworkRequests = new Map<number, number>();
+let nextNetworkRequestId = 1;
+let lastNetworkEventAt = Date.now();
 
 function wakeBackgroundSocket(): void {
   try {
@@ -66,6 +71,7 @@ function wakeBackgroundSocket(): void {
 }
 
 wakeBackgroundSocket();
+(window as Window & { [CONTENT_BRIDGE_READY_FLAG]?: boolean })[CONTENT_BRIDGE_READY_FLAG] = true;
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -197,11 +203,79 @@ function createMatchContext(): MatchContext {
   };
 }
 
-function getPluginHost(runtimePluginPacks: RuntimePluginPackPayload[] | undefined): ExtensionPluginHost {
+function isPluginScript(input: unknown): input is PluginScript {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const candidate = input as {
+    scriptId?: unknown;
+    extract?: unknown;
+    setValue?: unknown;
+    invoke?: unknown;
+  };
+  return (
+    typeof candidate.scriptId === "string" &&
+    typeof candidate.extract === "function" &&
+    typeof candidate.setValue === "function" &&
+    typeof candidate.invoke === "function"
+  );
+}
+
+function normalizePluginModuleScripts(moduleNs: unknown): PluginScript[] {
+  if (!moduleNs || typeof moduleNs !== "object") {
+    return [];
+  }
+  const moduleLike = moduleNs as {
+    pluginScripts?: unknown;
+    default?: unknown;
+  };
+  const candidate = Array.isArray(moduleLike.pluginScripts)
+    ? moduleLike.pluginScripts
+    : Array.isArray(moduleLike.default)
+      ? moduleLike.default
+      : [];
+  return candidate.filter((item): item is PluginScript => isPluginScript(item));
+}
+
+async function loadRuntimeScriptsFromPack(pack: RuntimePluginPackPayload): Promise<PluginScript[]> {
+  const cacheKey = `${pack.pluginId}:${pack.version}:${pack.updatedAt}:${pack.moduleCode.length}`;
+  const cached = runtimePluginScriptCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const moduleSource = `${pack.moduleCode}\n//# sourceURL=playwrong-runtime-plugin:${pack.pluginId}\n`;
+  const moduleUrl = URL.createObjectURL(new Blob([moduleSource], { type: "text/javascript" }));
+  try {
+    const moduleNs = await import(/* @vite-ignore */ moduleUrl);
+    const scripts = normalizePluginModuleScripts(moduleNs);
+    if (scripts.length === 0) {
+      console.warn(`[playwrong] runtime module ${pack.pluginId} has no valid plugin scripts`);
+      return [];
+    }
+    runtimePluginScriptCache.set(cacheKey, scripts);
+    return scripts;
+  } catch (error) {
+    console.warn(`[playwrong] failed to load runtime plugin module ${pack.pluginId}`, error);
+    return [];
+  } finally {
+    URL.revokeObjectURL(moduleUrl);
+  }
+}
+
+async function loadRuntimePluginScripts(runtimePluginPacks: RuntimePluginPackPayload[]): Promise<PluginScript[]> {
+  const scripts: PluginScript[] = [];
+  for (const pack of runtimePluginPacks) {
+    scripts.push(...(await loadRuntimeScriptsFromPack(pack)));
+  }
+  return scripts;
+}
+
+async function getPluginHost(runtimePluginPacks: RuntimePluginPackPayload[] | undefined): Promise<ExtensionPluginHost> {
   if (!runtimePluginPacks || runtimePluginPacks.length === 0) {
     return basePluginHost;
   }
-  const runtimeScripts = buildRuntimeManagedPluginScripts(runtimePluginPacks);
+  const runtimeScripts = await loadRuntimePluginScripts(runtimePluginPacks);
   if (runtimeScripts.length === 0) {
     return basePluginHost;
   }
@@ -238,6 +312,35 @@ function trackMutationBurst(): void {
   mutationTimestamps.push(Date.now());
 }
 
+function beginNetworkRequest(): number {
+  const id = nextNetworkRequestId;
+  nextNetworkRequestId += 1;
+  const now = Date.now();
+  activeNetworkRequests.set(id, now);
+  pendingRequests += 1;
+  lastNetworkEventAt = now;
+  return id;
+}
+
+function endNetworkRequest(requestId: number): void {
+  if (activeNetworkRequests.delete(requestId)) {
+    pendingRequests = clampNonNegative(pendingRequests - 1);
+  } else {
+    pendingRequests = clampNonNegative(pendingRequests - 1);
+  }
+  lastNetworkEventAt = Date.now();
+}
+
+function pendingNetworkRequestsSince(since: number): number {
+  let count = 0;
+  for (const startedAt of activeNetworkRequests.values()) {
+    if (startedAt >= since) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function recentMutationCount(windowMs: number): number {
   const now = Date.now();
   while (mutationTimestamps.length > 0 && mutationTimestamps[0] !== undefined && mutationTimestamps[0] < now - windowMs) {
@@ -254,11 +357,11 @@ function installNetworkTracker(): void {
   if (!win.__playwrongFetchPatched) {
     const nativeFetch = window.fetch.bind(window);
     window.fetch = (async (...args: Parameters<typeof fetch>): Promise<Response> => {
-      pendingRequests += 1;
+      const requestId = beginNetworkRequest();
       try {
         return await nativeFetch(...args);
       } finally {
-        pendingRequests = clampNonNegative(pendingRequests - 1);
+        endNetworkRequest(requestId);
       }
     }) as typeof fetch;
     win.__playwrongFetchPatched = true;
@@ -273,9 +376,9 @@ function installNetworkTracker(): void {
 
   const nativeSend = xhrProto.send;
   xhrProto.send = function patchedSend(...args: unknown[]): void {
-    pendingRequests += 1;
+    const requestId = beginNetworkRequest();
     const onDone = () => {
-      pendingRequests = clampNonNegative(pendingRequests - 1);
+      endNetworkRequest(requestId);
       this.removeEventListener("loadend", onDone);
     };
     this.addEventListener("loadend", onDone);
@@ -456,6 +559,36 @@ async function waitForStable(ctx: MatchContext, selected: SelectedPluginScript |
   throw createResolveError("ACTION_FAIL", "waitForStable timeout", {
     policy,
     latest: history[history.length - 1]
+  });
+}
+
+async function waitForNetworkIdleSince(
+  since: number,
+  selected: SelectedPluginScript | null,
+  timeoutMs?: number
+): Promise<void> {
+  const simpleRule = pickSimpleStabilityRule(createMatchContext());
+  const policy = mergedStabilityPolicy(selected, simpleRule);
+  const timeout = timeoutMs ?? policy.timeoutMs;
+  const quietWindowMs = Math.max(120, policy.sampleIntervalMs * 3);
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt <= timeout) {
+    const pendingSince = pendingNetworkRequestsSince(since);
+    const quietSince = Math.max(since, lastNetworkEventAt);
+    const quietElapsed = Date.now() - quietSince;
+    if (pendingSince === 0 && quietElapsed >= quietWindowMs) {
+      return;
+    }
+    await sleep(Math.max(40, policy.sampleIntervalMs));
+  }
+
+  throw createResolveError("ACTION_FAIL", "waitForNetworkIdle timeout", {
+    since,
+    timeoutMs: timeout,
+    pendingSince: pendingNetworkRequestsSince(since),
+    quietWindowMs,
+    lastNetworkEventAt
   });
 }
 
@@ -798,7 +931,7 @@ function extractGenericTree(): LocalExtractResult {
 
 async function extractTree(runtimePluginPacks: RuntimePluginPackPayload[] | undefined): Promise<LocalExtractResult> {
   const matchContext = createMatchContext();
-  const pluginHost = getPluginHost(runtimePluginPacks);
+  const pluginHost = await getPluginHost(runtimePluginPacks);
   const selected = await pluginHost.select(matchContext);
   let pluginResult: PluginExtractResult | null = null;
 
@@ -1126,7 +1259,7 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
 
     if (message.type === "bridge.setValue") {
       const matchContext = createMatchContext();
-      const pluginHost = getPluginHost(message.runtimePluginPacks);
+      const pluginHost = await getPluginHost(message.runtimePluginPacks);
       const selected = await pluginHost.select(matchContext);
       let handledByPlugin = false;
       if (selected) {
@@ -1155,8 +1288,9 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
     }
 
     if (message.type === "bridge.call") {
+      const callStartedAt = Date.now();
       const matchContext = createMatchContext();
-      const pluginHost = getPluginHost(message.runtimePluginPacks);
+      const pluginHost = await getPluginHost(message.runtimePluginPacks);
       const selected = await pluginHost.select(matchContext);
       let output: unknown;
       let handledByPlugin = false;
@@ -1186,7 +1320,7 @@ chrome.runtime.onMessage.addListener((message: ContentBridgeRequest, _sender, se
       }
 
       if (shouldWaitForStableAfterCall({ target: message.target, fn: message.fn })) {
-        await waitForStable(matchContext, selected);
+        await waitForNetworkIdleSince(callStartedAt, selected);
       }
       const response: ContentBridgeResponse<{ output?: unknown }> = {
         ok: true,

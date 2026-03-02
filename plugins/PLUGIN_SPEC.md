@@ -12,9 +12,6 @@
   "version": "0.1.0",
   "description": "optional",
   "entry": "src/index.ts",
-  "runtime": {
-    "path": "runtime-plugin.json"
-  },
   "skill": {
     "path": "SKILL.md"
   },
@@ -29,8 +26,7 @@
 - `schemaVersion`: 当前固定为 `1`
 - `pluginId`: 全局唯一，必须小写点分命名（`^[a-z0-9][a-z0-9._-]{1,127}$`）
 - `version`: semver 样式（如 `0.1.0`、`1.2.3-beta.1`）
-- `entry`: 插件入口 TS 文件（相对路径）
-- `runtime.path`: 可选，声明式运行时脚本 JSON（相对路径）
+- `entry`: 必填，插件入口 TS/JS 文件（相对路径）
 - `skill.path`: 插件 skill 文档路径（相对路径，必填）
 - `match`: 插件生效网站范围（至少提供 `hosts` 或 `paths` 之一）
 
@@ -70,58 +66,14 @@ description: explain when and how to use this plugin
 - ACTION_FAIL: ...
 ```
 
-## 3. Entry 导出约定
+## 3. Entry 导出约定（必填）
 
 `entry` 文件应导出以下之一：
 - `export const pluginScripts: PluginScript[] = [...]`
 - `export default PluginScript[]`
 
-脚本接口使用 `@playwrong/plugin-sdk` 中的 `PluginScript`。
-
-## 3.1 Runtime JSON（可选，面向不可重打包场景）
-
-当 extension 以已打包形式分发且不能重建时，推荐使用 `runtime.path`。
-
-`runtime.path` 指向的 JSON 最小结构：
-
-```json
-{
-  "scripts": [
-    {
-      "scriptId": "example.runtime.script",
-      "rules": [{ "hosts": ["example.com"], "paths": ["/foo/*"] }],
-      "extract": {
-        "pageType": "example.runtime",
-        "rootSelector": "main",
-        "fields": [
-          {
-            "id": "page.title",
-            "label": "Title",
-            "kind": "content",
-            "select": { "selector": "h1" }
-          }
-        ],
-        "lists": [
-          {
-            "id": "result.list",
-            "label": "Results",
-            "itemSelector": ".result-card",
-            "fields": [
-              { "id": "title", "selector": ".title" },
-              { "id": "link", "selector": "a", "attr": "href" }
-            ]
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-说明：
-- `scripts[*].extract.fields` 适合页面级单值抽取。
-- `scripts[*].extract.lists` 适合重复卡片/行抽取。
-- runtime JSON 由 server 通过 `GET /mapping-plugins/runtime` 下发给 extension 动态生效，无需重打包。
+server 会在插件安装/启用/重载时，使用 `bun build` 将 `entry` 打包为运行时 JS 模块；
+extension 在请求时通过 `GET /mapping-plugins/runtime` 动态获取并加载该模块。
 
 ## 4. 行为约定
 

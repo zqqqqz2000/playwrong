@@ -540,7 +540,7 @@ async function cmdMappingPlugins(args: string[]): Promise<void> {
       return;
     }
 
-    const shouldReloadExtension = getOptionalBooleanFlag(flags, "reload-extension") ?? true;
+    const shouldReloadExtension = getOptionalBooleanFlag(flags, "reload-extension") ?? false;
     const waitMs = getNumberFlag(flags, "wait-ms", 20000);
     const pageId = flags.page && typeof flags.page === "string" ? flags.page.trim() : "";
 

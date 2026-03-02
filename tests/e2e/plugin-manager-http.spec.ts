@@ -43,7 +43,6 @@ async function createPluginDir(root: string, dirName = "http-plugin-repo"): Prom
         version: "0.1.0",
         entry: "src/index.ts",
         skill: { path: "SKILL.md" },
-        runtime: { path: "runtime-plugin.json" },
         match: { hosts: ["example.com"] }
       },
       null,
@@ -92,33 +91,6 @@ async function createPluginDir(root: string, dirName = "http-plugin-repo"): Prom
     "utf8"
   );
 
-  await writeFile(
-    join(repoDir, "runtime-plugin.json"),
-    JSON.stringify(
-      {
-        scripts: [
-          {
-            scriptId: "example.http.runtime.script",
-            rules: [{ hosts: ["example.com"], paths: ["/"] }],
-            extract: {
-              pageType: "example.http.runtime",
-              fields: [
-                {
-                  id: "runtime.title",
-                  label: "Title",
-                  select: { selector: "title" }
-                }
-              ]
-            }
-          }
-        ]
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
-
   return repoDir;
 }
 
@@ -157,10 +129,7 @@ describe("Plugin manager HTTP routes", () => {
 
     const pluginManager = new PluginManager({
       workspaceRoot: workspace,
-      playwrongHomeDir: join(workspace, ".playwrong-home"),
-      generatedFilePath: join(workspace, "generated", "managed-plugins.generated.ts"),
-      generatedBridgeFilePath: join(workspace, "bridge", "managed-plugins.generated.ts"),
-      extensionBuildCommand: ["bun", "--version"]
+      playwrongHomeDir: join(workspace, ".playwrong-home")
     });
 
     const started = startBridgeHttpServer({
@@ -190,14 +159,14 @@ describe("Plugin manager HTTP routes", () => {
     );
     expect(listResult.plugins).toHaveLength(1);
 
-    const runtimeList = await requestJson<{ plugins: Array<{ pluginId: string; runtimeJson: string }> }>(
+    const runtimeList = await requestJson<{ plugins: Array<{ pluginId: string; moduleCode: string }> }>(
       baseUrl,
       "/mapping-plugins/runtime",
       "GET"
     );
     expect(runtimeList.plugins).toHaveLength(1);
     expect(runtimeList.plugins[0]?.pluginId).toBe("example.http.plugin");
-    expect(runtimeList.plugins[0]?.runtimeJson).toContain("example.http.runtime.script");
+    expect(runtimeList.plugins[0]?.moduleCode).toContain("example.http.plugin.script");
 
     const backwardCompatibleList = await requestJson<{ plugins: Array<{ pluginId: string }> }>(baseUrl, "/plugins", "GET");
     expect(backwardCompatibleList.plugins).toHaveLength(1);
