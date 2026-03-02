@@ -123,6 +123,6 @@
 - `match.hosts/paths` 声明插件网站作用域
 - `entry` 为必填（TS/JS 插件入口）
 - server 在安装/启用/重载时编译 `entry`，extension 通过 runtime 接口动态加载，无需重打包扩展
-- 服务端支持 `git clone` 安装到 `${PLAYWRONG_HOME}/plugins/installed/*`（默认 `~/.config/playwrong/plugins/installed/*`）
+- 服务端支持 `git clone` 安装到 `~/.config/playwrong/plugins/installed/*`
 - 用户可在 UI 或 API 中配置插件启用/禁用
 - 运行时插件查询接口：`GET /mapping-plugins/runtime`

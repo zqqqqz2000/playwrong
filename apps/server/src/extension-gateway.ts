@@ -10,6 +10,7 @@ import {
   type ExtensionRpcResultByMethod,
   type RemoteCallParams,
   type RemoteExtractResult,
+  type RemoteMainWorldInvokeResult,
   type RemotePageInfo,
   type RemoteSetValueParams
 } from "@playwrong/protocol";
@@ -149,6 +150,13 @@ export class ExtensionGateway implements ExecutionBridge {
     return result as RemoteExtractResult;
   }
 
+  async activatePage(pageId: string): Promise<void> {
+    const result = await this.request("page.activate", { pageId });
+    if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true) {
+      throw new BridgeError("ACTION_FAIL", "Invalid page.activate response");
+    }
+  }
+
   async setValue(input: RemoteSetValueParams): Promise<void> {
     await this.request("page.setValue", input);
   }
@@ -159,6 +167,18 @@ export class ExtensionGateway implements ExecutionBridge {
       return (result as { output?: unknown }).output;
     }
     return result;
+  }
+
+  async invokeInMainWorld(pageId: string, code: string, args?: unknown[]): Promise<RemoteMainWorldInvokeResult> {
+    const result = await this.request("page.mainworldInvoke", {
+      pageId,
+      code,
+      args: Array.isArray(args) ? args : []
+    });
+    if (!result || typeof result !== "object") {
+      throw new BridgeError("ACTION_FAIL", "Invalid page.mainworldInvoke response");
+    }
+    return result as RemoteMainWorldInvokeResult;
   }
 
   async captureScreenshot(pageId: string): Promise<ExtensionRpcResultByMethod["page.screenshot"] | null> {

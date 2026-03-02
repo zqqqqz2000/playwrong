@@ -61,6 +61,7 @@ export interface RuntimePluginPack {
   name: string;
   version: string;
   updatedAt: string;
+  moduleUrlPath: string;
   moduleCode: string;
 }
 
@@ -289,10 +290,34 @@ export class PluginManager {
         name: plugin.name,
         version: plugin.version,
         updatedAt: plugin.updatedAt,
+        moduleUrlPath: this.runtimeModuleUrlPath(plugin.pluginId, plugin.updatedAt),
         moduleCode
       });
     }
     return packs;
+  }
+
+  async readEnabledRuntimePluginModule(pluginId: string): Promise<{ pluginId: string; updatedAt: string; moduleCode: string }> {
+    const normalizedPluginId = pluginId.trim();
+    if (normalizedPluginId.length === 0) {
+      throw new BridgeError("INVALID_REQUEST", "pluginId is required");
+    }
+
+    const registry = await this.readRegistry();
+    const plugin = registry.plugins.find((candidate) => candidate.pluginId === normalizedPluginId && candidate.enabled);
+    if (!plugin) {
+      throw new BridgeError("NOT_FOUND", `Enabled runtime plugin not found: ${normalizedPluginId}`, {
+        pluginId: normalizedPluginId
+      });
+    }
+
+    const modulePath = await this.ensureCompiledRuntimeModule(plugin);
+    const moduleCode = await readFile(modulePath, "utf8");
+    return {
+      pluginId: plugin.pluginId,
+      updatedAt: plugin.updatedAt,
+      moduleCode
+    };
   }
 
   async install(input: InstallPluginInput): Promise<InstalledPluginRecord> {
@@ -525,6 +550,12 @@ export class PluginManager {
 
   private runtimeModuleRelPath(): string {
     return ".playwrong/runtime-plugin.mjs";
+  }
+
+  private runtimeModuleUrlPath(pluginId: string, updatedAt: string): string {
+    const search = new URLSearchParams();
+    search.set("v", updatedAt);
+    return `/mapping-plugins/runtime/module/${encodeURIComponent(pluginId)}?${search.toString()}`;
   }
 
   private resolveRuntimeModulePath(plugin: InstalledPluginRecord): string {

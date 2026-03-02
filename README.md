@@ -131,10 +131,27 @@ Mapping plugin repository must include `playwrong.plugin.json` at root.
 Runtime storage isolation for mapping plugins:
 
 - Plugin install/registry state is outside this repository.
-- Root path: `PLAYWRONG_HOME` or default `~/.config/playwrong`.
+- Root path: `~/.config/playwrong`.
 - Runtime files:
-  - registry: `${PLAYWRONG_HOME}/plugins/registry.json`
-  - installed plugins: `${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
+  - registry: `~/.config/playwrong/plugins/registry.json`
+  - installed plugins: `~/.config/playwrong/plugins/installed/<pluginId>`
+
+Server runtime config file:
+
+- Path: `~/.config/playwrong/config.toml`
+- Supported keys:
+
+```toml
+[server]
+# Optional. Omit for no per-request timeout.
+extension_request_timeout_ms = 0
+
+# Optional. Grace period before reporting "No extension is connected".
+extension_connect_grace_ms = 10000
+
+# Optional. WebSocket idle timeout in seconds. 0 means never idle-timeout.
+websocket_idle_timeout_seconds = 0
+```
 
 Required manifest fields
 
@@ -147,9 +164,11 @@ Required manifest fields
 - `match.hosts` host matching rule
 - `match.paths` path matching rule
 
-Runtime plugin modules are read from `/mapping-plugins/runtime` by extension at request time.
-Server compiles each enabled plugin `entry` to a bundled JS module (via `bun build`) and delivers module code dynamically.
+Runtime plugin modules are discovered from `/mapping-plugins/runtime` and loaded from `/mapping-plugins/runtime/module/<pluginId>` by extension at request time.
+Server compiles each enabled plugin `entry` to a bundled JS module (via `bun build`) and delivers module URLs dynamically.
 Dynamic plugin install/enable/disable does not require extension rebuild.
+For MAIN world access, plugins should use SDK helper `invokeInMainWorld` (message type `playwrong.mainworld.invoke`) only.
+Do not depend on action-specific custom channels.
 
 Skill document pointed by `skill.path` must include the following sections.
 
@@ -460,10 +479,27 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 映射插件运行态存储隔离：
 
 - 插件安装与注册状态不写入当前仓库。
-- 根目录使用 `PLAYWRONG_HOME`，未设置时默认 `~/.config/playwrong`。
+- 根目录固定为 `~/.config/playwrong`。
 - 运行态路径：
-  - registry：`${PLAYWRONG_HOME}/plugins/registry.json`
-  - 已安装插件：`${PLAYWRONG_HOME}/plugins/installed/<pluginId>`
+  - registry：`~/.config/playwrong/plugins/registry.json`
+  - 已安装插件：`~/.config/playwrong/plugins/installed/<pluginId>`
+
+server 运行时配置文件：
+
+- 路径：`~/.config/playwrong/config.toml`
+- 支持字段：
+
+```toml
+[server]
+# 可选。不配置表示不启用单次请求超时。
+extension_request_timeout_ms = 0
+
+# 可选。扩展未连接时等待重连的宽限时间（毫秒）。
+extension_connect_grace_ms = 10000
+
+# 可选。WebSocket 空闲超时（秒）。0 表示不因空闲断开。
+websocket_idle_timeout_seconds = 0
+```
 
 关键字段
 
@@ -476,9 +512,11 @@ bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:12345
 - `match.hosts`
 - `match.paths`
 
-extension 会在请求时通过 `/mapping-plugins/runtime` 动态读取插件运行时模块。
-server 会把每个启用插件的 `entry` 用 `bun build` 编译为 JS bundle，并以 runtime 方式下发。
+extension 会先通过 `/mapping-plugins/runtime` 读取插件元数据，再通过 `/mapping-plugins/runtime/module/<pluginId>` 动态加载模块。
+server 会把每个启用插件的 `entry` 用 `bun build` 编译为 JS bundle，并以 runtime URL 方式下发。
 安装/启停插件无需重打包 extension。
+MAIN world 访问统一通过 SDK 的 `invokeInMainWorld`（`playwrong.mainworld.invoke`）。
+不要依赖动作特化的自定义通道。
 
 `skill.path` 指向的文档必须包含以下章节。
 

@@ -8,6 +8,7 @@ const DEFAULT_CONFIG_FILE_NAME = "config.toml";
 interface ServerConfigSection {
   extension_request_timeout_ms?: number;
   extension_connect_grace_ms?: number;
+  websocket_idle_timeout_seconds?: number;
 }
 
 interface PlaywrongConfigFile {
@@ -17,6 +18,7 @@ interface PlaywrongConfigFile {
 export interface ServerRuntimeConfig {
   requestTimeoutMs?: number;
   connectGracePeriodMs?: number;
+  websocketIdleTimeoutSeconds?: number;
 }
 
 function expandHomePath(pathValue: string): string {
@@ -78,6 +80,7 @@ export function loadServerRuntimeConfig(input?: { playwrongHomeDir?: string }): 
 
   const requestTimeoutMs = toOptionalNonNegativeInt(server.extension_request_timeout_ms);
   const connectGracePeriodMs = toOptionalNonNegativeInt(server.extension_connect_grace_ms);
+  const websocketIdleTimeoutSeconds = toOptionalNonNegativeInt(server.websocket_idle_timeout_seconds);
 
   const runtimeConfig: ServerRuntimeConfig = {};
   if (requestTimeoutMs !== undefined) {
@@ -85,6 +88,9 @@ export function loadServerRuntimeConfig(input?: { playwrongHomeDir?: string }): 
   }
   if (connectGracePeriodMs !== undefined) {
     runtimeConfig.connectGracePeriodMs = connectGracePeriodMs;
+  }
+  if (websocketIdleTimeoutSeconds !== undefined) {
+    runtimeConfig.websocketIdleTimeoutSeconds = websocketIdleTimeoutSeconds;
   }
   return runtimeConfig;
 }

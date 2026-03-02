@@ -623,7 +623,7 @@ async function wire(): Promise<void> {
       }
       const out = await requestJson<PluginGenerateResponse>(endpoint, "/plugins/generate", "POST", {});
       requireRef(refs.rawOut, "rawOut").textContent = JSON.stringify(out, null, 2);
-      showMessage(requireRef(refs.globalMsg, "globalMsg"), "generated managed plugin registry", false);
+      showMessage(requireRef(refs.globalMsg, "globalMsg"), "generated plugin registry", false);
     } catch (error) {
       showMessage(requireRef(refs.globalMsg, "globalMsg"), formatError(error), true);
     }

@@ -15,8 +15,9 @@ const STORAGE_SERVER_WS_URL_KEY = "serverWsUrl";
 const RECONNECT_DELAY_MS = 1500;
 const RECONNECT_ALARM_NAME = "playwrong.reconnect";
 const RECONNECT_ALARM_PERIOD_MINUTES = 1;
-const CONTENT_BRIDGE_READY_FLAG = "__playwrongContentBridgeReady";
 const INJECT_DEBOUNCE_MS = 5000;
+const CONTENT_BRIDGE_RETRY_DELAY_MS = 120;
+const RUNTIME_PLUGIN_CACHE_TTL_MS = 5000;
 
 interface ContentExtractResult {
   pageType: string;
@@ -41,7 +42,14 @@ let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 const lastInjectAtByTab = new Map<number, number>();
 const injectingTabIds = new Set<number>();
-let ensureContentBridgePromise: Promise<void> | null = null;
+let runtimePluginFetchPromise: Promise<RuntimePluginPackPayload[]> | null = null;
+let runtimePluginCache:
+  | {
+      packs: RuntimePluginPackPayload[];
+      hash: string;
+      fetchedAt: number;
+    }
+  | null = null;
 
 function ensureReconnectAlarm(): void {
   chrome.alarms.create(RECONNECT_ALARM_NAME, {
@@ -94,6 +102,14 @@ function wsToHttpBase(wsUrl: string): string | null {
   }
 }
 
+function hashRuntimePluginPacks(packs: readonly RuntimePluginPackPayload[]): string {
+  return packs.map((pack) => `${pack.pluginId}:${pack.version}:${pack.updatedAt}:${pack.moduleUrl ?? ""}`).join("|");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseRuntimePluginPacksPayload(input: unknown): RuntimePluginPackPayload[] {
   if (!input || typeof input !== "object") {
     return [];
@@ -113,67 +129,100 @@ function parseRuntimePluginPacksPayload(input: unknown): RuntimePluginPackPayloa
       name?: unknown;
       version?: unknown;
       updatedAt?: unknown;
-      moduleCode?: unknown;
+      moduleUrlPath?: unknown;
     };
     if (
       typeof plugin.pluginId !== "string" ||
       typeof plugin.name !== "string" ||
       typeof plugin.version !== "string" ||
-      typeof plugin.updatedAt !== "string" ||
-      typeof plugin.moduleCode !== "string"
+      typeof plugin.updatedAt !== "string"
     ) {
       continue;
     }
-    out.push({
+    const parsedPack: RuntimePluginPackPayload = {
       pluginId: plugin.pluginId,
       name: plugin.name,
       version: plugin.version,
-      updatedAt: plugin.updatedAt,
-      moduleCode: plugin.moduleCode
-    });
+      updatedAt: plugin.updatedAt
+    };
+    if (typeof plugin.moduleUrlPath === "string" && plugin.moduleUrlPath.length > 0) {
+      parsedPack.moduleUrl = plugin.moduleUrlPath;
+    } else {
+      continue;
+    }
+    out.push(parsedPack);
   }
   return out;
 }
 
 async function fetchRuntimePluginPacks(): Promise<RuntimePluginPackPayload[]> {
-  const wsUrl = await getServerWsUrl();
-  const baseUrl = wsToHttpBase(wsUrl);
-  if (!baseUrl) {
-    return [];
+  const now = Date.now();
+  if (runtimePluginCache && now - runtimePluginCache.fetchedAt <= RUNTIME_PLUGIN_CACHE_TTL_MS) {
+    return runtimePluginCache.packs;
   }
+  if (runtimePluginFetchPromise) {
+    return await runtimePluginFetchPromise;
+  }
+
+  runtimePluginFetchPromise = (async () => {
+    const wsUrl = await getServerWsUrl();
+    const baseUrl = wsToHttpBase(wsUrl);
+    if (!baseUrl) {
+      return runtimePluginCache?.packs ?? [];
+    }
+
+    try {
+      const response = await fetch(new URL("/mapping-plugins/runtime", baseUrl), {
+        method: "GET",
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+      if (!response.ok) {
+        return runtimePluginCache?.packs ?? [];
+      }
+
+      const packs = parseRuntimePluginPacksPayload(await response.json());
+      for (const pack of packs) {
+        if (typeof pack.moduleUrl === "string" && pack.moduleUrl.length > 0) {
+          pack.moduleUrl = new URL(pack.moduleUrl, baseUrl).toString();
+        }
+      }
+
+      const hash = hashRuntimePluginPacks(packs);
+      if (runtimePluginCache && runtimePluginCache.hash === hash) {
+        runtimePluginCache.fetchedAt = Date.now();
+        return runtimePluginCache.packs;
+      }
+      runtimePluginCache = {
+        packs,
+        hash,
+        fetchedAt: Date.now()
+      };
+      return packs;
+    } catch {
+      return runtimePluginCache?.packs ?? [];
+    }
+  })();
 
   try {
-    const response = await fetch(new URL("/mapping-plugins/runtime", baseUrl), {
-      method: "GET",
-      headers: {
-        "content-type": "application/json"
-      }
-    });
-    if (!response.ok) {
-      return [];
-    }
-    return parseRuntimePluginPacksPayload(await response.json());
-  } catch {
-    return [];
+    return await runtimePluginFetchPromise;
+  } finally {
+    runtimePluginFetchPromise = null;
   }
 }
 
-function parsePageId(pageId: string): number {
-  const match = /^tab:(\d+)$/.exec(pageId);
-  if (!match) {
-    throw new RpcHandledError("INVALID_REQUEST", `Invalid pageId format: ${pageId}`);
-  }
-  return Number(match[1]);
+function isTransientTabMessageError(message: string): boolean {
+  return (
+    message.includes("Receiving end does not exist") ||
+    message.includes("Could not establish connection") ||
+    message.includes("message channel closed before a response was received") ||
+    message.includes("The frame was removed") ||
+    message.includes("No matching message handler")
+  );
 }
 
-function ensureTabMessageResponse<T>(response: ContentBridgeResponse<T> | undefined): ContentBridgeResponse<T> {
-  if (!response) {
-    throw new RpcHandledError("ACTION_FAIL", "No response from content script");
-  }
-  return response;
-}
-
-async function sendToTab<T>(tabId: number, message: ContentBridgeRequest): Promise<ContentBridgeResponse<T>> {
+async function sendMessageToTab<T>(tabId: number, message: ContentBridgeRequest): Promise<ContentBridgeResponse<T>> {
   return await new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, message, (response: ContentBridgeResponse<T> | undefined) => {
       const runtimeError = chrome.runtime.lastError;
@@ -184,6 +233,80 @@ async function sendToTab<T>(tabId: number, message: ContentBridgeRequest): Promi
       resolve(ensureTabMessageResponse(response));
     });
   });
+}
+
+async function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+  if (timeoutMs <= 0) {
+    return;
+  }
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  if (tab.status === "complete") {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeoutMs);
+    const listener = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo): void => {
+      if (updatedTabId !== tabId) {
+        return;
+      }
+      if (changeInfo.status !== "complete") {
+        return;
+      }
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function ensureTabCanReceiveMessages(tabId: number): Promise<void> {
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    throw new RpcHandledError("NOT_FOUND", `Tab not found for id: ${tabId}`);
+  }
+
+  if (!tab.url || (!tab.url.startsWith("http://") && !tab.url.startsWith("https://"))) {
+    throw new RpcHandledError("ACTION_FAIL", `Tab cannot inject content bridge: ${tab.url ?? "unknown"}`);
+  }
+  if (tab.status !== "complete") {
+    await waitForTabComplete(tabId, 4000);
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      throw new RpcHandledError("NOT_FOUND", `Tab not found for id: ${tabId}`);
+    }
+  }
+  if (await hasContentBridge(tabId)) {
+    return;
+  }
+  await injectContentBridge(tab);
+  await sleep(CONTENT_BRIDGE_RETRY_DELAY_MS);
+}
+
+async function sendToTab<T>(tabId: number, message: ContentBridgeRequest): Promise<ContentBridgeResponse<T>> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await sendMessageToTab<T>(tabId, message);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      if (!isTransientTabMessageError(messageText) || attempt >= 1) {
+        throw error;
+      }
+      await ensureTabCanReceiveMessages(tabId);
+    }
+  }
+  throw new RpcHandledError("ACTION_FAIL", "tabs.sendMessage failed after retries");
 }
 
 async function getTrackableTabs(): Promise<chrome.tabs.Tab[]> {
@@ -201,24 +324,8 @@ async function getTrackableTabs(): Promise<chrome.tabs.Tab[]> {
 
 async function hasContentBridge(tabId: number): Promise<boolean> {
   try {
-    const response = await sendToTab<{ ok: true }>(tabId, { type: "playwrong.ping" });
+    const response = await sendMessageToTab<{ ok: true }>(tabId, { type: "playwrong.ping" });
     return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function hasContentBridgeMarker(tabId: number): Promise<boolean> {
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (readyFlag: string) => {
-        const global = window as unknown as Record<string, unknown>;
-        return global[readyFlag] === true;
-      },
-      args: [CONTENT_BRIDGE_READY_FLAG]
-    });
-    return Boolean(results[0]?.result);
   } catch {
     return false;
   }
@@ -248,62 +355,26 @@ async function injectContentBridge(tab: chrome.tabs.Tab): Promise<void> {
       target: { tabId },
       files: ["content.js"]
     });
+  } catch {
+    // best effort inject; some tabs may not allow script execution.
   } finally {
     injectingTabIds.delete(tabId);
   }
 }
 
-async function ensureContentBridgeInjectedOnce(): Promise<void> {
-  const tabs = await getTrackableTabs();
-  for (const tab of tabs) {
-    const tabId = tab.id;
-    if (tabId === undefined) {
-      continue;
-    }
-    const ready = await hasContentBridge(tabId);
-    if (ready) {
-      continue;
-    }
-    const markerReady = await hasContentBridgeMarker(tabId);
-    if (markerReady) {
-      continue;
-    }
-    try {
-      await injectContentBridge(tab);
-    } catch {
-      // best effort inject; some tabs may not allow script execution.
-    }
+function parsePageId(pageId: string): number {
+  const match = /^tab:(\d+)$/.exec(pageId);
+  if (!match) {
+    throw new RpcHandledError("INVALID_REQUEST", `Invalid pageId format: ${pageId}`);
   }
+  return Number(match[1]);
 }
 
-function ensureContentBridgeInjected(): Promise<void> {
-  if (ensureContentBridgePromise) {
-    return ensureContentBridgePromise;
+function ensureTabMessageResponse<T>(response: ContentBridgeResponse<T> | undefined): ContentBridgeResponse<T> {
+  if (!response) {
+    throw new RpcHandledError("ACTION_FAIL", "No response from content script");
   }
-  ensureContentBridgePromise = ensureContentBridgeInjectedOnce().finally(() => {
-    ensureContentBridgePromise = null;
-  });
-  return ensureContentBridgePromise;
-}
-
-type MainWorldMonacoAction = "read" | "set";
-
-interface MainWorldMonacoResponse {
-  ok: boolean;
-  value?: string;
-  reason?: string;
-  error?: string;
-}
-
-interface MainWorldClickResponse {
-  ok: boolean;
-  reason?: string;
-  error?: string;
-}
-
-interface MainWorldClickRequest {
-  markerAttr: string;
-  markerValue: string;
+  return response;
 }
 
 interface MainWorldInvokeRequest {
@@ -316,190 +387,6 @@ interface MainWorldInvokeResponse {
   value?: unknown;
   reason?: string;
   error?: string;
-}
-
-async function callMonacoInMainWorld(
-  tabId: number,
-  action: MainWorldMonacoAction,
-  value?: string
-): Promise<MainWorldMonacoResponse> {
-  const request: { action: MainWorldMonacoAction; value?: string } = { action };
-  if (value !== undefined) {
-    request.value = value;
-  }
-
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: (request: { action: MainWorldMonacoAction; value?: string }) => {
-      const globalObj = window as unknown as {
-        monaco?: {
-          editor?: {
-            getEditors?: () => Array<{
-              hasTextFocus?: () => boolean;
-              getModel?: () => {
-                getValue?: () => string | null | undefined;
-                setValue?: (next: string) => void;
-              } | null;
-            }>;
-          };
-        };
-      };
-
-      const editors = globalObj.monaco?.editor?.getEditors?.() ?? [];
-      if (!Array.isArray(editors) || editors.length === 0) {
-        return {
-          ok: false,
-          reason: "no_monaco_editors"
-        };
-      }
-
-      const focused = editors.find((editor) => editor?.hasTextFocus?.() === true);
-      const ordered = focused ? [focused, ...editors.filter((editor) => editor !== focused)] : editors;
-      const model = ordered
-        .map((editor) => editor?.getModel?.())
-        .find((candidate) => candidate && typeof candidate.getValue === "function");
-      if (!model) {
-        return {
-          ok: false,
-          reason: "no_monaco_model"
-        };
-      }
-
-      if (request.action === "set") {
-        if (typeof model.setValue !== "function") {
-          return {
-            ok: false,
-            reason: "no_monaco_setter"
-          };
-        }
-        model.setValue(typeof request.value === "string" ? request.value : "");
-        return {
-          ok: true
-        };
-      }
-
-      const raw = model.getValue?.();
-      return {
-        ok: true,
-        value: typeof raw === "string" ? raw : String(raw ?? "")
-      };
-    },
-    args: [request]
-  });
-
-  if (!result || typeof result.result !== "object" || result.result === null) {
-    return {
-      ok: false,
-      error: "invalid_main_world_response"
-    };
-  }
-
-  const payload = result.result as {
-    ok?: unknown;
-    value?: unknown;
-    reason?: unknown;
-    error?: unknown;
-  };
-  const response: MainWorldMonacoResponse = {
-    ok: payload.ok === true
-  };
-  if (typeof payload.value === "string") {
-    response.value = payload.value;
-  }
-  if (typeof payload.reason === "string") {
-    response.reason = payload.reason;
-  }
-  if (typeof payload.error === "string") {
-    response.error = payload.error;
-  }
-  return response;
-}
-
-async function callClickInMainWorld(tabId: number, request: MainWorldClickRequest): Promise<MainWorldClickResponse> {
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: (request: MainWorldClickRequest) => {
-      const attr = typeof request.markerAttr === "string" ? request.markerAttr : "";
-      const value = typeof request.markerValue === "string" ? request.markerValue : "";
-      if (!attr || !value) {
-        return {
-          ok: false,
-          reason: "invalid_marker"
-        };
-      }
-
-      const escaped =
-        typeof CSS !== "undefined" && typeof CSS.escape === "function"
-          ? CSS.escape(value)
-          : value.replace(/["\\]/g, "\\$&");
-      const selector = `[${attr}="${escaped}"]`;
-      const target = document.querySelector(selector);
-      if (!(target instanceof HTMLElement)) {
-        return {
-          ok: false,
-          reason: "target_not_found"
-        };
-      }
-
-      const rect = target.getBoundingClientRect();
-      const clientX = rect.left + Math.max(1, Math.floor(rect.width / 2));
-      const clientY = rect.top + Math.max(1, Math.floor(rect.height / 2));
-
-      const mouseBase: MouseEventInit = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        button: 0,
-        buttons: 1,
-        clientX,
-        clientY
-      };
-      const pointerBase: PointerEventInit = {
-        ...mouseBase,
-        pointerId: 1,
-        pointerType: "mouse",
-        isPrimary: true
-      };
-
-      if (typeof PointerEvent === "function") {
-        target.dispatchEvent(new PointerEvent("pointerdown", pointerBase));
-        target.dispatchEvent(new PointerEvent("pointerup", pointerBase));
-      }
-      target.dispatchEvent(new MouseEvent("mousedown", mouseBase));
-      target.dispatchEvent(new MouseEvent("mouseup", mouseBase));
-      target.dispatchEvent(new MouseEvent("click", mouseBase));
-      target.click();
-      return {
-        ok: true
-      };
-    },
-    args: [request]
-  });
-
-  if (!result || typeof result.result !== "object" || result.result === null) {
-    return {
-      ok: false,
-      error: "invalid_main_world_click_response"
-    };
-  }
-  const payload = result.result as {
-    ok?: unknown;
-    reason?: unknown;
-    error?: unknown;
-  };
-  const response: MainWorldClickResponse = {
-    ok: payload.ok === true
-  };
-  if (typeof payload.reason === "string") {
-    response.reason = payload.reason;
-  }
-  if (typeof payload.error === "string") {
-    response.error = payload.error;
-  }
-  return response;
 }
 
 async function callInvokeInMainWorld(tabId: number, request: MainWorldInvokeRequest): Promise<MainWorldInvokeResponse> {
@@ -581,6 +468,28 @@ async function listRemotePages(): Promise<ExtensionRpcResultByMethod["pages.list
     page.active = Boolean(tab.active);
     return page;
   });
+}
+
+async function activateRemotePage(pageId: string): Promise<ExtensionRpcResultByMethod["page.activate"]> {
+  const tabId = parsePageId(pageId);
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    throw new RpcHandledError("NOT_FOUND", `Tab not found for pageId: ${pageId}`);
+  }
+  return { ok: true };
+}
+
+async function invokeInMainWorldRemote(
+  params: ExtensionRpcRequest<"page.mainworldInvoke">["params"]
+): Promise<ExtensionRpcResultByMethod["page.mainworldInvoke"]> {
+  const tabId = parsePageId(params.pageId);
+  const code = typeof params.code === "string" ? params.code : "";
+  if (!code.trim()) {
+    throw new RpcHandledError("INVALID_REQUEST", "code is required");
+  }
+  const args = Array.isArray(params.args) ? params.args : [];
+  return await callInvokeInMainWorld(tabId, { code, args });
 }
 
 async function extractRemotePage(pageId: string): Promise<ExtensionRpcResultByMethod["page.extract"]> {
@@ -733,8 +642,14 @@ async function handleRpcRequest<M extends ExtensionRpcMethod>(
   if (method === "pages.list") {
     return (await listRemotePages()) as ExtensionRpcResultByMethod[M];
   }
+  if (method === "page.activate") {
+    return (await activateRemotePage((params as { pageId: string }).pageId)) as ExtensionRpcResultByMethod[M];
+  }
   if (method === "page.extract") {
     return (await extractRemotePage((params as { pageId: string }).pageId)) as ExtensionRpcResultByMethod[M];
+  }
+  if (method === "page.mainworldInvoke") {
+    return (await invokeInMainWorldRemote(params as ExtensionRpcRequest<"page.mainworldInvoke">["params"])) as ExtensionRpcResultByMethod[M];
   }
   if (method === "page.setValue") {
     return (await setRemoteValue(params as ExtensionRpcRequest<"page.setValue">["params"])) as ExtensionRpcResultByMethod[M];
@@ -828,7 +743,6 @@ async function connectSocket(): Promise<void> {
     if (socket === nextSocket && nextSocket.readyState === WebSocket.OPEN) {
       nextSocket.send(JSON.stringify(connectedEvent));
     }
-    void ensureContentBridgeInjected();
   });
 
   nextSocket.addEventListener("message", (event) => {
@@ -851,13 +765,11 @@ async function connectSocket(): Promise<void> {
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureReconnectAlarm();
-  void ensureContentBridgeInjected();
   void connectSocket();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureReconnectAlarm();
-  void ensureContentBridgeInjected();
   void connectSocket();
 });
 
@@ -875,6 +787,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (!changes[STORAGE_SERVER_WS_URL_KEY]) {
     return;
   }
+  runtimePluginCache = null;
+  runtimePluginFetchPromise = null;
   if (socket) {
     socket.close();
   } else {
@@ -887,73 +801,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   const type = (message as { type?: unknown }).type;
-  if (type === "playwrong.mainworld.monaco") {
-    const tabId = sender.tab?.id;
-    if (tabId === undefined) {
-      sendResponse({
-        ok: false,
-        error: "Cannot resolve sender tab"
-      } satisfies MainWorldMonacoResponse);
-      return;
-    }
-
-    const actionRaw = (message as { action?: unknown }).action;
-    if (actionRaw !== "read" && actionRaw !== "set") {
-      sendResponse({
-        ok: false,
-        error: "Invalid main world Monaco action"
-      } satisfies MainWorldMonacoResponse);
-      return;
-    }
-    const valueRaw = (message as { value?: unknown }).value;
-    const nextValue = typeof valueRaw === "string" ? valueRaw : undefined;
-
-    void callMonacoInMainWorld(tabId, actionRaw, nextValue)
-      .then((result) => {
-        sendResponse(result);
-      })
-      .catch((error: unknown) => {
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error)
-        } satisfies MainWorldMonacoResponse);
-      });
-    return true;
-  }
-
-  if (type === "playwrong.mainworld.click") {
-    const tabId = sender.tab?.id;
-    if (tabId === undefined) {
-      sendResponse({
-        ok: false,
-        error: "Cannot resolve sender tab"
-      } satisfies MainWorldClickResponse);
-      return;
-    }
-
-    const markerAttr = (message as { markerAttr?: unknown }).markerAttr;
-    const markerValue = (message as { markerValue?: unknown }).markerValue;
-    if (typeof markerAttr !== "string" || !markerAttr || typeof markerValue !== "string" || !markerValue) {
-      sendResponse({
-        ok: false,
-        error: "Invalid main world click payload"
-      } satisfies MainWorldClickResponse);
-      return;
-    }
-
-    void callClickInMainWorld(tabId, { markerAttr, markerValue })
-      .then((result) => {
-        sendResponse(result);
-      })
-      .catch((error: unknown) => {
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error)
-        } satisfies MainWorldClickResponse);
-      });
-    return true;
-  }
-
   if (type === "playwrong.mainworld.invoke") {
     const tabId = sender.tab?.id;
     if (tabId === undefined) {
@@ -999,7 +846,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   void connectSocket()
     .then(() => {
-      void ensureContentBridgeInjected();
       sendResponse({ ok: true });
     })
     .catch((error: unknown) => {

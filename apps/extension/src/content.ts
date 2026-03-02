@@ -40,6 +40,7 @@ const SEARCH_RESULT_SELECTOR = "#search, #b_results, [data-testid='mainline']";
 const basePluginScripts = [...createBuiltinSiteScripts(), ...userPluginScripts];
 const basePluginHost = new ExtensionPluginHost(basePluginScripts);
 const runtimePluginScriptCache = new Map<string, PluginScript[]>();
+const runtimePluginLoadFailureCache = new Set<string>();
 let latestTree: SemanticNode[] = [];
 
 const DEFAULT_STABILITY_POLICY: Required<StabilityPolicy> = {
@@ -238,28 +239,36 @@ function normalizePluginModuleScripts(moduleNs: unknown): PluginScript[] {
 }
 
 async function loadRuntimeScriptsFromPack(pack: RuntimePluginPackPayload): Promise<PluginScript[]> {
-  const cacheKey = `${pack.pluginId}:${pack.version}:${pack.updatedAt}:${pack.moduleCode.length}`;
+  const cacheKey = `${pack.pluginId}:${pack.version}:${pack.updatedAt}:${pack.moduleUrl ?? ""}`;
   const cached = runtimePluginScriptCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-
-  const moduleSource = `${pack.moduleCode}\n//# sourceURL=playwrong-runtime-plugin:${pack.pluginId}\n`;
-  const moduleUrl = URL.createObjectURL(new Blob([moduleSource], { type: "text/javascript" }));
+  if (runtimePluginLoadFailureCache.has(cacheKey)) {
+    return [];
+  }
   try {
-    const moduleNs = await import(/* @vite-ignore */ moduleUrl);
+    let moduleNs: unknown = null;
+    if (typeof pack.moduleUrl === "string" && pack.moduleUrl.length > 0) {
+      moduleNs = await import(/* @vite-ignore */ pack.moduleUrl);
+    } else {
+      console.warn(`[playwrong] runtime module ${pack.pluginId} missing moduleUrl; skip loading`);
+      runtimePluginLoadFailureCache.add(cacheKey);
+      return [];
+    }
     const scripts = normalizePluginModuleScripts(moduleNs);
     if (scripts.length === 0) {
       console.warn(`[playwrong] runtime module ${pack.pluginId} has no valid plugin scripts`);
+      runtimePluginLoadFailureCache.add(cacheKey);
       return [];
     }
     runtimePluginScriptCache.set(cacheKey, scripts);
+    runtimePluginLoadFailureCache.delete(cacheKey);
     return scripts;
   } catch (error) {
     console.warn(`[playwrong] failed to load runtime plugin module ${pack.pluginId}`, error);
+    runtimePluginLoadFailureCache.add(cacheKey);
     return [];
-  } finally {
-    URL.revokeObjectURL(moduleUrl);
   }
 }
 

@@ -25,6 +25,16 @@ interface SyncPageRequest {
   pageId: string;
 }
 
+interface ActivatePageRequest {
+  pageId: string;
+}
+
+interface MainWorldInvokeRequest {
+  pageId: string;
+  code: string;
+  args?: unknown[];
+}
+
 interface InstallPluginRequest {
   sourceType?: "git" | "dir" | "zip";
   repoUrl?: string;
@@ -46,8 +56,53 @@ async function readJson<T>(request: Request): Promise<T> {
   return (await request.json()) as T;
 }
 
+function sanitizeJsonString(input: string): string {
+  const noControls = input.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ");
+  const maybeWellFormed = noControls as string & { toWellFormed?: () => string };
+  if (typeof maybeWellFormed.toWellFormed === "function") {
+    return maybeWellFormed.toWellFormed();
+  }
+  return noControls.replace(/[\ud800-\udfff]/g, " ");
+}
+
+function sanitizeJsonValue(input: unknown, seen: WeakSet<object>): unknown {
+  if (typeof input === "string") {
+    return sanitizeJsonString(input);
+  }
+  if (
+    input === null ||
+    typeof input === "number" ||
+    typeof input === "boolean" ||
+    input === undefined
+  ) {
+    return input;
+  }
+  if (typeof input === "bigint") {
+    return input.toString();
+  }
+  if (Array.isArray(input)) {
+    return input.map((item) => sanitizeJsonValue(item, seen));
+  }
+  if (input instanceof Date) {
+    return input.toISOString();
+  }
+  if (typeof input === "object") {
+    if (seen.has(input)) {
+      return null;
+    }
+    seen.add(input);
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+      out[key] = sanitizeJsonValue(value, seen);
+    }
+    return out;
+  }
+  return String(input);
+}
+
 function json(status: number, payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
+  const sanitizedPayload = sanitizeJsonValue(payload, new WeakSet<object>());
+  return new Response(JSON.stringify(sanitizedPayload), {
     status,
     headers: { "content-type": "application/json" }
   });
@@ -70,6 +125,38 @@ function isMappingPluginRoute(pathname: string, suffix = ""): boolean {
   return pathname === `/plugins${suffix}` || pathname === `/mapping-plugins${suffix}`;
 }
 
+function parseRuntimeModulePluginId(pathname: string): string | null {
+  const prefixCandidates = ["/mapping-plugins/runtime/module/", "/plugins/runtime/module/"];
+  for (const prefix of prefixCandidates) {
+    if (!pathname.startsWith(prefix)) {
+      continue;
+    }
+    const encoded = pathname.slice(prefix.length);
+    if (!encoded) {
+      return null;
+    }
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function runtimeModuleResponse(moduleCode: string): Response {
+  return new Response(moduleCode, {
+    status: 200,
+    headers: {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "content-type"
+    }
+  });
+}
+
 export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}): {
   server: ReturnType<typeof Bun.serve>;
   core: BridgeCore;
@@ -78,14 +165,13 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
   const core = options.core ?? new BridgeCore();
   const runtimeConfig = loadServerRuntimeConfig();
   const requestTimeoutMs = runtimeConfig.requestTimeoutMs;
-  const connectGracePeriodMs = runtimeConfig.connectGracePeriodMs;
+  const connectGracePeriodMs = runtimeConfig.connectGracePeriodMs ?? 10000;
+  const websocketIdleTimeoutSeconds = runtimeConfig.websocketIdleTimeoutSeconds ?? 0;
   const gatewayOptions: { requestTimeoutMs?: number; connectGracePeriodMs?: number } = {};
   if (requestTimeoutMs !== undefined) {
     gatewayOptions.requestTimeoutMs = requestTimeoutMs;
   }
-  if (connectGracePeriodMs !== undefined) {
-    gatewayOptions.connectGracePeriodMs = connectGracePeriodMs;
-  }
+  gatewayOptions.connectGracePeriodMs = connectGracePeriodMs;
   const extensionGateway = options.extensionGateway ?? new ExtensionGateway(gatewayOptions);
   const pluginManager = options.pluginManager ?? new PluginManager();
   const executor = options.executor ?? extensionGateway;
@@ -109,6 +195,25 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
       }
 
       try {
+        const runtimeModulePluginId = parseRuntimeModulePluginId(url.pathname);
+        if (runtimeModulePluginId !== null) {
+          if (request.method === "OPTIONS") {
+            return new Response(null, {
+              status: 204,
+              headers: {
+                "access-control-allow-origin": "*",
+                "access-control-allow-methods": "GET, OPTIONS",
+                "access-control-allow-headers": "content-type"
+              }
+            });
+          }
+          if (request.method !== "GET") {
+            return json(405, { error: { code: "INVALID_REQUEST", message: "Method not allowed" } });
+          }
+          const module = await pluginManager.readEnabledRuntimePluginModule(runtimeModulePluginId);
+          return runtimeModuleResponse(module.moduleCode);
+        }
+
         if (request.method === "GET" && url.pathname === "/health") {
           return json(200, { ok: true });
         }
@@ -129,6 +234,33 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
         if (request.method === "GET" && url.pathname === "/pages/remote") {
           const pages = await extensionGateway.listPages();
           return json(200, { pages });
+        }
+
+        if (request.method === "POST" && url.pathname === "/pages/activate") {
+          const payload = await readJson<ActivatePageRequest>(request);
+          if (!payload.pageId || typeof payload.pageId !== "string") {
+            throw new BridgeError("INVALID_REQUEST", "pageId is required", {
+              field: "pageId"
+            });
+          }
+          await extensionGateway.activatePage(payload.pageId);
+          return json(200, { ok: true, pageId: payload.pageId });
+        }
+
+        if (request.method === "POST" && url.pathname === "/pages/mainworld-invoke") {
+          const payload = await readJson<MainWorldInvokeRequest>(request);
+          if (!payload.pageId || typeof payload.pageId !== "string") {
+            throw new BridgeError("INVALID_REQUEST", "pageId is required", {
+              field: "pageId"
+            });
+          }
+          if (!payload.code || typeof payload.code !== "string") {
+            throw new BridgeError("INVALID_REQUEST", "code is required", {
+              field: "code"
+            });
+          }
+          const result = await extensionGateway.invokeInMainWorld(payload.pageId, payload.code, payload.args);
+          return json(200, result);
         }
 
         if (request.method === "GET" && isMappingPluginRoute(url.pathname)) {
@@ -281,6 +413,7 @@ export function startBridgeHttpServer(options: StartBridgeHttpServerOptions = {}
       }
     },
     websocket: {
+      idleTimeout: websocketIdleTimeoutSeconds,
       open(ws) {
         extensionGateway.attach(ws);
       },

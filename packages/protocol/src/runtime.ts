@@ -37,9 +37,18 @@ export interface RemoteScreenshotResult {
   data: string;
 }
 
+export interface RemoteMainWorldInvokeResult {
+  ok: boolean;
+  value?: unknown;
+  reason?: string;
+  error?: string;
+}
+
 export type ExtensionRpcMethod =
   | "pages.list"
+  | "page.activate"
   | "page.extract"
+  | "page.mainworldInvoke"
   | "page.setValue"
   | "page.call"
   | "page.screenshot"
@@ -47,7 +56,9 @@ export type ExtensionRpcMethod =
 
 export type ExtensionRpcParamsByMethod = {
   "pages.list": Record<string, never>;
+  "page.activate": { pageId: string };
   "page.extract": { pageId: string };
+  "page.mainworldInvoke": { pageId: string; code: string; args?: unknown[] };
   "page.setValue": RemoteSetValueParams;
   "page.call": RemoteCallParams;
   "page.screenshot": { pageId: string };
@@ -56,7 +67,9 @@ export type ExtensionRpcParamsByMethod = {
 
 export type ExtensionRpcResultByMethod = {
   "pages.list": RemotePageInfo[];
+  "page.activate": { ok: true };
   "page.extract": RemoteExtractResult;
+  "page.mainworldInvoke": RemoteMainWorldInvokeResult;
   "page.setValue": { ok: true };
   "page.call": { output?: unknown };
   "page.screenshot": RemoteScreenshotResult;

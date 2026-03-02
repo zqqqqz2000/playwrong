@@ -6,7 +6,7 @@
   "types": "src/index.ts",
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/background.ts src/content.ts src/popup.ts --outdir dist --target browser --format esm && cp manifest.json dist/manifest.json && cp src/popup.html dist/popup.html"
+    "build": "bun run clean && bun build src/background.ts src/popup.ts --outdir dist --target browser --format esm && bun build src/content.ts --outdir dist --target browser --format iife && cp manifest.json dist/manifest.json && cp src/popup.html dist/popup.html"
   },
   "dependencies": {
     "@playwrong/plugin-sdk": "workspace:*",
