@@ -205,37 +205,81 @@ async function waitExtensionConnected(baseUrl: string): Promise<void> {
 }
 
 function hostFromUrl(input: string): string {
-  return new URL(input).hostname;
+  return new URL(input).hostname.toLowerCase();
 }
 
-function pickPageId(pages: RemotePageInfo[], targetUrl: string): string | null {
-  const host = hostFromUrl(targetUrl);
-  const hostMatch = (url: string | undefined): boolean => {
-    if (!url) {
-      return false;
-    }
-    try {
-      return new URL(url).hostname === host;
-    } catch {
-      return false;
-    }
-  };
+function tryHostFromUrl(input: string | undefined): string | null {
+  if (!input) {
+    return null;
+  }
+  try {
+    return new URL(input).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
 
-  const activeHost = pages.find((p) => p.active && hostMatch(p.url));
-  if (activeHost) {
-    return activeHost.pageId;
+function hostRoot(host: string): string {
+  const parts = host.split(".").filter(Boolean);
+  if (parts.length <= 2) {
+    return host;
+  }
+  return parts.slice(-2).join(".");
+}
+
+function sameHostFamily(a: string | null, b: string | null): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  if (a.endsWith(`.${b}`) || b.endsWith(`.${a}`)) {
+    return true;
+  }
+  return hostRoot(a) === hostRoot(b);
+}
+
+function pickPageId(pages: RemotePageInfo[], targetUrl: string, actualUrl: string): string | null {
+  const targetHost = tryHostFromUrl(targetUrl);
+  const actualHost = tryHostFromUrl(actualUrl);
+
+  const exactActualActive = pages.find((p) => p.active && p.url === actualUrl);
+  if (exactActualActive) {
+    return exactActualActive.pageId;
+  }
+  const exactActualAny = pages.find((p) => p.url === actualUrl);
+  if (exactActualAny) {
+    return exactActualAny.pageId;
   }
 
-  const anyHost = pages.find((p) => hostMatch(p.url));
-  if (anyHost) {
-    return anyHost.pageId;
+  const actualActive = pages.find((p) => p.active && sameHostFamily(tryHostFromUrl(p.url), actualHost));
+  if (actualActive) {
+    return actualActive.pageId;
+  }
+  const actualAny = pages.find((p) => sameHostFamily(tryHostFromUrl(p.url), actualHost));
+  if (actualAny) {
+    return actualAny.pageId;
+  }
+
+  const targetActive = pages.find((p) => p.active && sameHostFamily(tryHostFromUrl(p.url), targetHost));
+  if (targetActive) {
+    return targetActive.pageId;
+  }
+  const targetAny = pages.find((p) => sameHostFamily(tryHostFromUrl(p.url), targetHost));
+  if (targetAny) {
+    return targetAny.pageId;
   }
 
   const activeAny = pages.find((p) => p.active);
   return activeAny?.pageId ?? null;
 }
 
-async function syncPageWithRetry(baseUrl: string, pageId: string): Promise<UpsertSnapshotRequest & { rev: number }> {
+async function syncPageWithRetry(
+  baseUrl: string,
+  pageId: string,
+  page?: Page
+): Promise<UpsertSnapshotRequest & { rev: number }> {
   let lastError: unknown = null;
 
   for (let i = 0; i < 12; i += 1) {
@@ -243,6 +287,16 @@ async function syncPageWithRetry(baseUrl: string, pageId: string): Promise<Upser
       return await postJson<UpsertSnapshotRequest & { rev: number }>(baseUrl, "/sync/page", { pageId });
     } catch (error) {
       lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const recoverableMissingReceiver =
+        message.includes("Receiving end does not exist") || message.includes("No extension is connected");
+      if (recoverableMissingReceiver) {
+        await waitExtensionConnected(baseUrl).catch(() => {});
+        if (page) {
+          await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await wait(500);
+        }
+      }
       await wait(450);
     }
   }
@@ -254,7 +308,12 @@ function hasPageCall(snapshot: UpsertSnapshotRequest & { rev: number }, name: st
   return (snapshot.pageCalls ?? []).some((c) => c.name === name);
 }
 
-async function runRefreshBehavior(baseUrl: string, pageId: string, snapshot: UpsertSnapshotRequest & { rev: number }): Promise<{
+async function runRefreshBehavior(
+  baseUrl: string,
+  pageId: string,
+  snapshot: UpsertSnapshotRequest & { rev: number },
+  page?: Page
+): Promise<{
   result: BehaviorResult;
   snapshot: UpsertSnapshotRequest & { rev: number };
 }> {
@@ -297,7 +356,7 @@ async function runRefreshBehavior(baseUrl: string, pageId: string, snapshot: Ups
   }
 
   await wait(900);
-  const syncedAfter = await syncPageWithRetry(baseUrl, pageId);
+  const syncedAfter = await syncPageWithRetry(baseUrl, pageId, page);
 
   if (syncedAfter.rev < callRev) {
     issues.push(`rev_not_advanced:expected>=${callRev},got=${syncedAfter.rev}`);
@@ -322,7 +381,8 @@ async function runSearchBehavior(
   baseUrl: string,
   pageId: string,
   snapshot: UpsertSnapshotRequest & { rev: number },
-  behavior: SearchBehavior
+  behavior: SearchBehavior,
+  page?: Page
 ): Promise<{
   result: BehaviorResult;
   snapshot: UpsertSnapshotRequest & { rev: number };
@@ -338,7 +398,7 @@ async function runSearchBehavior(
       break;
     }
     await wait(400);
-    readySnapshot = await syncPageWithRetry(baseUrl, pageId);
+    readySnapshot = await syncPageWithRetry(baseUrl, pageId, page);
   }
 
   const readyFlat = flattenNodes(readySnapshot.tree);
@@ -393,7 +453,7 @@ async function runSearchBehavior(
 
   for (let i = 0; i < 32; i += 1) {
     await wait(500);
-    latest = await syncPageWithRetry(baseUrl, pageId);
+    latest = await syncPageWithRetry(baseUrl, pageId, page);
     resultCount = countResultActions(latest.tree);
     next = hasNextPagination(latest.tree);
     if (resultCount >= behavior.minResultActions) {
@@ -442,21 +502,32 @@ async function runSiteCase(input: {
     await page.goto(site.url, { waitUntil: "commit", timeout: 20000 });
   }
   await wait(1600);
-
-  const pages = await getJson<{ pages: RemotePageInfo[] }>(baseUrl, "/pages/remote");
-  const pageId = pickPageId(pages.pages, site.url);
-  if (!pageId) {
-    throw new Error(`Cannot resolve pageId for site ${site.id}`);
+  const actualUrl = page.url();
+  const preIssues: string[] = [];
+  const targetHost = tryHostFromUrl(site.url);
+  const actualHost = tryHostFromUrl(actualUrl);
+  if (targetHost && actualHost && !sameHostFamily(targetHost, actualHost)) {
+    preIssues.push(`host_mismatch:target=${targetHost},actual=${actualHost}`);
   }
 
-  let snapshot = await syncPageWithRetry(baseUrl, pageId);
+  const pages = await getJson<{ pages: RemotePageInfo[] }>(baseUrl, "/pages/remote");
+  const pageId = pickPageId(pages.pages, site.url, actualUrl);
+  if (!pageId) {
+    const samplePages = pages.pages
+      .slice(0, 10)
+      .map((p) => `${p.active ? "*" : ""}${p.pageId}:${p.url}`)
+      .join("|");
+    throw new Error(`Cannot resolve pageId for site ${site.id}; actualUrl=${actualUrl}; pages=${samplePages}`);
+  }
+
+  let snapshot = await syncPageWithRetry(baseUrl, pageId, page);
   const pull = await postJson<PullResponse>(baseUrl, "/pull", { pageId });
 
   const flat = flattenNodes(snapshot.tree);
   const actionCount = flat.filter((node) => node.kind === "action").length;
   const editableCount = flat.filter((node) => node.kind === "editable").length;
 
-  const issues = detectKnownBlockers(snapshot.pageType, snapshot.tree);
+  const issues = [...preIssues, ...detectKnownBlockers(snapshot.pageType, snapshot.tree)];
 
   if (site.allowedPageTypes && !site.allowedPageTypes.includes(snapshot.pageType)) {
     issues.push(`unexpected_page_type:${snapshot.pageType}`);
@@ -486,13 +557,13 @@ async function runSiteCase(input: {
   const behaviorResults: BehaviorResult[] = [];
   for (const behavior of site.behaviors) {
     if (behavior.kind === "refresh") {
-      const run = await runRefreshBehavior(baseUrl, pageId, snapshot);
+      const run = await runRefreshBehavior(baseUrl, pageId, snapshot, page);
       behaviorResults.push(run.result);
       snapshot = run.snapshot;
       continue;
     }
 
-    const run = await runSearchBehavior(baseUrl, pageId, snapshot, behavior);
+    const run = await runSearchBehavior(baseUrl, pageId, snapshot, behavior, page);
     behaviorResults.push(run.result);
     snapshot = run.snapshot;
   }
