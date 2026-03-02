@@ -25,6 +25,29 @@ Playwrong provides a stable abstraction layer between web pages and language mod
 - `plugins` stores mapping plugin specification, examples, installed plugins, and registry state
 - `skills` contains Codex workflow skills for fast path automation and mapping plugin authoring
 
+### XML Example For LLM
+
+`pull` returns a JSON payload where the `xml` field is the page snapshot consumed by the LLM.
+
+```xml
+<page id="tab:123456" rev="42" pageType="google.search" url="https://www.google.com/search?q=playwrong+llm+automation" title="playwrong llm automation - Google Search">
+  <functionCall name="search" sideEffect="true"/>
+  <section id="search.root" label="Google Search">
+    <editable id="search.query" label="Query">
+      playwrong llm automation
+    </editable>
+    <action id="search.submit" label="Google Search"/>
+    <list id="search.results">
+      <item id="search.result.1">
+        <content id="search.result.1.title">Playwrong - GitHub</content>
+        <action id="search.result.1.open" label="Open result"/>
+      </item>
+    </list>
+    <action id="search.pagination.next" label="Next page"/>
+  </section>
+</page>
+```
+
 ### Quick Start
 
 Requirements
@@ -39,35 +62,39 @@ Install dependencies
 bun install
 ```
 
-Run the main end to end suites
+Start server
 
 ```bash
-bun run test:e2e:browser-google
-bun run test:e2e:codex-google
+bun run cli:serve
 ```
 
-Run strict real Google suites
+Compile browser extension
 
 ```bash
-bun run test:e2e:browser-google:real
-bun run test:e2e:codex-google:real
+bun run build:extension
 ```
 
-### Manual Workflow
-
-Build extension
-
-```bash
-bun run --cwd apps/extension build
-```
+Install extension in Chrome
 
 Load extension from `apps/extension/dist` in Chrome extension page with developer mode enabled.
+
+### Manual Workflow
 
 Start server
 
 ```bash
-bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
+bun run cli:serve
 ```
+
+Compile browser extension
+
+```bash
+bun run build:extension
+```
+
+Install extension in Chrome
+
+Load extension from `apps/extension/dist` in Chrome extension page with developer mode enabled.
 
 List remote pages
 
@@ -194,16 +221,9 @@ Available strategy groups
 
 Default behavior requires continuous success across k samples, plus URL stability, pending request status, and DOM mutation signals.
 
-### Testing
+### Developer E2E Suites
 
-Type and full test suite
-
-```bash
-bun run typecheck
-bun test
-```
-
-Key end to end suites
+These suites are mainly for local development and integration debugging.
 
 ```bash
 bun run test:e2e:browser-google
@@ -211,6 +231,15 @@ bun run test:e2e:browser-google:real
 bun run test:e2e:capability-10-sites
 bun run test:e2e:codex-google
 bun run test:e2e:codex-google:real
+```
+
+### Testing
+
+Type and full test suite
+
+```bash
+bun run typecheck
+bun test
 ```
 
 Plugin management suites
@@ -318,6 +347,29 @@ Playwrong 是面向生产场景的浏览器自动化桥接层。
 - `plugins` 存放映射插件规范、示例、安装目录与注册状态
 - `skills` 存放 Codex 自动化流程能力，包含映射插件编写流程
 
+### LLM 接收 XML 示例
+
+`pull` 返回的 JSON 中，`xml` 字段就是 LLM 直接读取的页面结构。
+
+```xml
+<page id="tab:123456" rev="42" pageType="google.search" url="https://www.google.com/search?q=playwrong+llm+automation" title="playwrong llm automation - Google Search">
+  <functionCall name="search" sideEffect="true"/>
+  <section id="search.root" label="Google Search">
+    <editable id="search.query" label="Query">
+      playwrong llm automation
+    </editable>
+    <action id="search.submit" label="Google Search"/>
+    <list id="search.results">
+      <item id="search.result.1">
+        <content id="search.result.1.title">Playwrong - GitHub</content>
+        <action id="search.result.1.open" label="Open result"/>
+      </item>
+    </list>
+    <action id="search.pagination.next" label="Next page"/>
+  </section>
+</page>
+```
+
 ### 快速开始
 
 环境要求
@@ -332,35 +384,39 @@ Playwrong 是面向生产场景的浏览器自动化桥接层。
 bun install
 ```
 
-执行主要端到端用例
+启动服务
 
 ```bash
-bun run test:e2e:browser-google
-bun run test:e2e:codex-google
+bun run cli:serve
 ```
 
-执行严格真实 Google 用例
+编译浏览器扩展
 
 ```bash
-bun run test:e2e:browser-google:real
-bun run test:e2e:codex-google:real
+bun run build:extension
 ```
 
-### 手动联调流程
-
-构建扩展
-
-```bash
-bun run --cwd apps/extension build
-```
+安装浏览器扩展
 
 在 Chrome 扩展页面开启开发者模式，并加载 `apps/extension/dist`。
+
+### 手动联调流程
 
 启动服务
 
 ```bash
-bun apps/cli/src/index.ts serve --host 127.0.0.1 --port 7878
+bun run cli:serve
 ```
+
+编译浏览器扩展
+
+```bash
+bun run build:extension
+```
+
+安装浏览器扩展
+
+在 Chrome 扩展页面开启开发者模式，并加载 `apps/extension/dist`。
 
 查看远端页面
 
@@ -491,16 +547,9 @@ bun apps/cli/src/index.ts mapping-plugins reload --endpoint http://127.0.0.1:787
 
 默认策略要求连续 k 次采样满足条件，并结合 URL 稳定性、请求状态与 DOM 变更信号共同判定。
 
-### 测试命令
+### 开发联调 E2E 套件
 
-类型检查与全量测试
-
-```bash
-bun run typecheck
-bun test
-```
-
-关键端到端测试
+以下用例主要用于本地开发与联调排障。
 
 ```bash
 bun run test:e2e:browser-google
@@ -508,6 +557,15 @@ bun run test:e2e:browser-google:real
 bun run test:e2e:capability-10-sites
 bun run test:e2e:codex-google
 bun run test:e2e:codex-google:real
+```
+
+### 测试命令
+
+类型检查与全量测试
+
+```bash
+bun run typecheck
+bun test
 ```
 
 插件管理测试
