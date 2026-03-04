@@ -3,6 +3,42 @@ import type { FunctionCallDef, PluginExtractResult, ScalarValue, SemanticNode } 
 
 const HOSTS = ["github.com", "www.github.com"];
 const NEW_REPO_URL = "https://github.com/new";
+const RECEIPT_VERSION = "llm_webop_v2";
+
+interface InvokeReceiptOptions {
+  usedSelector?: string;
+  retryable?: boolean;
+  suggestedNext?: string;
+}
+
+function withInvokeReceipt(
+  targetId: string,
+  fn: string,
+  urlBefore: string,
+  data: Record<string, unknown> = {},
+  options: InvokeReceiptOptions = {}
+): Record<string, unknown> {
+  return {
+    ...data,
+    ok: true,
+    contractVersion: RECEIPT_VERSION,
+    action: {
+      targetId,
+      fn
+    },
+    page: {
+      urlBefore,
+      urlAfter: window.location.href
+    },
+    diagnostics: {
+      usedSelector: options.usedSelector ?? null
+    },
+    recovery: {
+      retryable: options.retryable ?? true,
+      suggestedNext: options.suggestedNext ?? "sync_then_pull"
+    }
+  };
+}
 
 const SELECTORS = {
   newRepoLink: [
@@ -601,61 +637,66 @@ export const pluginScripts: PluginScript[] = [
       throw new Error("PLUGIN_MISS");
     },
     async invoke(ctx, fn, args): Promise<unknown> {
+      const urlBefore = window.location.href;
+
       if (ctx.target.id === "page" && fn === "refresh") {
         window.location.reload();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore);
       }
 
       if (ctx.target.id === "page" && fn === "openNewRepository") {
         window.location.href = NEW_REPO_URL;
-        return { ok: true, url: NEW_REPO_URL };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, { url: NEW_REPO_URL });
       }
 
       if (ctx.target.id === "page" && fn === "createRepository") {
-        return invokeCreateRepository(args);
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, invokeCreateRepository(args));
       }
       if (ctx.target.id === "page" && fn === "debugRepoForm") {
-        return invokeDebugRepoForm();
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, invokeDebugRepoForm(), {
+          retryable: false,
+          suggestedNext: "none"
+        });
       }
 
       if (ctx.target.id === "github.repo.new.open" && fn === "click") {
         window.location.href = NEW_REPO_URL;
-        return { ok: true, url: NEW_REPO_URL };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, { url: NEW_REPO_URL }, { usedSelector: "a[href='/new']" });
       }
 
       if (ctx.target.id === "github.repo.new.submit" && (fn === "click" || fn === "submit")) {
         submitNewRepositoryForm();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "form[action='/repositories'] button[type='submit']" });
       }
 
       if (ctx.target.id === "github.repo.new.name" && fn === "focus") {
         const field = requireElement(getRepoNameField());
         field.focus();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "input#repository_name" });
       }
 
       if (ctx.target.id === "github.repo.new.description" && fn === "focus") {
         const field = requireElement(getDescriptionField());
         field.focus();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "textarea#repository_description" });
       }
 
       if (ctx.target.id === "github.repo.new.visibility.public" && fn === "click") {
         const field = requireElement(firstElement<HTMLInputElement>(SELECTORS.visibilityPublic));
         field.click();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "input#repository_visibility_public" });
       }
 
       if (ctx.target.id === "github.repo.new.visibility.private" && fn === "click") {
         const field = requireElement(firstElement<HTMLInputElement>(SELECTORS.visibilityPrivate));
         field.click();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "input#repository_visibility_private" });
       }
 
       if (ctx.target.id === "github.repo.new.auto_init" && fn === "click") {
         const field = requireElement(firstElement<HTMLInputElement>(SELECTORS.autoInit));
         field.click();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: "input#repository_auto_init" });
       }
 
       throw new Error("PLUGIN_MISS");

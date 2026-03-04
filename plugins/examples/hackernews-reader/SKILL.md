@@ -15,6 +15,7 @@ description: Use the Hacker News reader plugin to extract story actions and open
 
 - Page functions:
   - `refresh()`
+  - `debugStories()`
 - Node functions:
   - `hn.story.N.open`: `click()`
 
@@ -22,8 +23,10 @@ description: Use the Hacker News reader plugin to extract story actions and open
 
 - `PLUGIN_MISS`: not on supported Hacker News list pages.
 - Story node not found: run `refresh()` and then `sync/pull`.
+- Invoke receipt missing required keys: run `debugStories()` and repull before retry.
 
 ## Notes
 
 - Plugin focuses on list extraction and link opening only.
 - Non-matching actions return `PLUGIN_MISS`.
+- Successful invoke responses use `contractVersion=llm_webop_v2`.

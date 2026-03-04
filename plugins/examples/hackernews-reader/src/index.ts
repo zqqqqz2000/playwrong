@@ -1,8 +1,45 @@
 import type { PluginScript } from "@playwrong/plugin-sdk";
-import type { PluginExtractResult, SemanticNode } from "@playwrong/protocol";
+import type { FunctionCallDef, PluginExtractResult, SemanticNode } from "@playwrong/protocol";
+
+const RECEIPT_VERSION = "llm_webop_v2";
 
 function text(input: string | null | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+interface InvokeReceiptOptions {
+  usedSelector?: string;
+  retryable?: boolean;
+  suggestedNext?: string;
+}
+
+function withInvokeReceipt(
+  targetId: string,
+  fn: string,
+  urlBefore: string,
+  data: Record<string, unknown> = {},
+  options: InvokeReceiptOptions = {}
+): Record<string, unknown> {
+  return {
+    ...data,
+    ok: true,
+    contractVersion: RECEIPT_VERSION,
+    action: {
+      targetId,
+      fn
+    },
+    page: {
+      urlBefore,
+      urlAfter: window.location.href
+    },
+    diagnostics: {
+      usedSelector: options.usedSelector ?? null
+    },
+    recovery: {
+      retryable: options.retryable ?? true,
+      suggestedNext: options.suggestedNext ?? "sync_then_pull"
+    }
+  };
 }
 
 function extractStories(): SemanticNode[] {
@@ -55,6 +92,23 @@ function findNodeById(tree: SemanticNode[], id: string): SemanticNode | null {
   return null;
 }
 
+function buildDebugStoriesPayload(): Record<string, unknown> {
+  const stories = extractStories();
+  return {
+    url: window.location.href,
+    title: document.title,
+    storyCount: stories.length,
+    storyActionIds: stories
+      .map((item) => item.children?.[0]?.id)
+      .filter((id): id is string => typeof id === "string")
+  };
+}
+
+const PAGE_CALLS: FunctionCallDef[] = [
+  { name: "refresh", sideEffect: true },
+  { name: "debugStories", sideEffect: false }
+];
+
 export const pluginScripts: PluginScript[] = [
   {
     scriptId: "example.hackernews.reader.v1",
@@ -72,13 +126,27 @@ export const pluginScripts: PluginScript[] = [
             children: stories
           }
         ],
-        pageCalls: [{ name: "refresh", sideEffect: true }]
+        pageCalls: PAGE_CALLS
       };
     },
     async setValue(): Promise<void> {
       throw new Error("PLUGIN_MISS");
     },
     async invoke(ctx, fn): Promise<unknown> {
+      const urlBefore = window.location.href;
+
+      if (ctx.target.id === "page" && fn === "refresh") {
+        window.location.reload();
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore);
+      }
+
+      if (ctx.target.id === "page" && fn === "debugStories") {
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, buildDebugStoriesPayload(), {
+          retryable: false,
+          suggestedNext: "none"
+        });
+      }
+
       if (!/^hn\.story\.\d+\.open$/.test(ctx.target.id) || fn !== "click") {
         throw new Error("PLUGIN_MISS");
       }
@@ -90,7 +158,7 @@ export const pluginScripts: PluginScript[] = [
       }
 
       window.location.href = href;
-      return { ok: true, href };
+      return withInvokeReceipt(ctx.target.id, fn, urlBefore, { href }, { usedSelector: ".titleline > a" });
     }
   }
 ];

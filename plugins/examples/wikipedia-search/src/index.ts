@@ -4,9 +4,62 @@ import type { FunctionCallDef, PluginExtractResult, SemanticNode } from "@playwr
 const QUERY_SELECTOR = "#searchInput, input[name='search']";
 const SUBMIT_SELECTOR = "button.cdx-search-input__end-button, button[type='submit']";
 const ARTICLE_SELECTOR = "#mw-content-text a[href^='/wiki/']";
+const RECEIPT_VERSION = "llm_webop_v2";
 
 function text(input: string | null | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+interface InvokeReceiptOptions {
+  usedSelector?: string;
+  retryable?: boolean;
+  suggestedNext?: string;
+}
+
+function withInvokeReceipt(
+  targetId: string,
+  fn: string,
+  urlBefore: string,
+  data: Record<string, unknown> = {},
+  options: InvokeReceiptOptions = {}
+): Record<string, unknown> {
+  return {
+    ...data,
+    ok: true,
+    contractVersion: RECEIPT_VERSION,
+    action: {
+      targetId,
+      fn
+    },
+    page: {
+      urlBefore,
+      urlAfter: window.location.href
+    },
+    diagnostics: {
+      usedSelector: options.usedSelector ?? null
+    },
+    recovery: {
+      retryable: options.retryable ?? true,
+      suggestedNext: options.suggestedNext ?? "sync_then_pull"
+    }
+  };
+}
+
+function buildDebugSurface(): Record<string, unknown> {
+  const queryInput = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(QUERY_SELECTOR);
+  const submitButton = document.querySelector<HTMLElement>(SUBMIT_SELECTOR);
+  const results = extractResultNodes();
+  return {
+    url: window.location.href,
+    title: document.title,
+    hasQueryInput: Boolean(queryInput),
+    hasSubmitButton: Boolean(submitButton),
+    queryPreview: (queryInput?.value ?? "").slice(0, 120),
+    resultCount: results.length,
+    resultActionIds: results
+      .map((item) => item.children?.[0]?.id)
+      .filter((id): id is string => typeof id === "string")
+  };
 }
 
 function extractResultNodes(): SemanticNode[] {
@@ -66,7 +119,8 @@ const pageCalls: FunctionCallDef[] = [
       required: ["query"]
     }
   },
-  { name: "refresh", sideEffect: true }
+  { name: "refresh", sideEffect: true },
+  { name: "debugSurface", sideEffect: false }
 ];
 
 export const pluginScripts: PluginScript[] = [
@@ -141,6 +195,13 @@ export const pluginScripts: PluginScript[] = [
       input.dispatchEvent(new Event("change", { bubbles: true }));
     },
     async invoke(ctx, fn, args): Promise<unknown> {
+      const urlBefore = window.location.href;
+
+      if (ctx.target.id === "page" && fn === "refresh") {
+        window.location.reload();
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore);
+      }
+
       if (ctx.target.id === "page" && fn === "search") {
         const query = typeof args?.query === "string" ? args.query : "";
         const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(QUERY_SELECTOR);
@@ -151,7 +212,14 @@ export const pluginScripts: PluginScript[] = [
         input.value = query;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         submit.click();
-        return { ok: true, query };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, { query }, { usedSelector: `${QUERY_SELECTOR} -> ${SUBMIT_SELECTOR}` });
+      }
+
+      if (ctx.target.id === "page" && fn === "debugSurface") {
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, buildDebugSurface(), {
+          retryable: false,
+          suggestedNext: "none"
+        });
       }
 
       if ((ctx.target.id === "wiki.search.submit" || ctx.target.id === "wiki.search.query") && (fn === "click" || fn === "submit")) {
@@ -160,7 +228,7 @@ export const pluginScripts: PluginScript[] = [
           throw new Error("PLUGIN_MISS");
         }
         submit.click();
-        return { ok: true };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, {}, { usedSelector: SUBMIT_SELECTOR });
       }
 
       if (/^wiki\.result\.\d+\.open$/.test(ctx.target.id) && fn === "click") {
@@ -170,7 +238,7 @@ export const pluginScripts: PluginScript[] = [
           throw new Error("PLUGIN_MISS");
         }
         window.location.href = href;
-        return { ok: true, href };
+        return withInvokeReceipt(ctx.target.id, fn, urlBefore, { href });
       }
 
       throw new Error("PLUGIN_MISS");

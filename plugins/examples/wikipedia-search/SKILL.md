@@ -16,6 +16,7 @@ description: Use the Wikipedia search plugin to fill query, submit search, and o
 - Page functions:
   - `search(query: string)`
   - `refresh()`
+  - `debugSurface()`
 - Node functions:
   - `wiki.search.query`: `focus()`, `submit()`
   - `wiki.search.submit`: `click()`
@@ -25,8 +26,10 @@ description: Use the Wikipedia search plugin to fill query, submit search, and o
 
 - `PLUGIN_MISS`: page structure changed or page is outside plugin scope.
 - Search result list empty: keep query, run `refresh()`, then `sync/pull` again.
+- Invoke result missing required receipt keys: run `debugSurface()` and repull before retry.
 
 ## Notes
 
 - Plugin scope is restricted by manifest match rules for `*.wikipedia.org`.
 - If DOM structure is unavailable, plugin returns `PLUGIN_MISS` and runtime falls back.
+- Successful invoke responses use `contractVersion=llm_webop_v2`.

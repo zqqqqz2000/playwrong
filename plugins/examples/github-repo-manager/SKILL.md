@@ -33,8 +33,10 @@ description: Use the GitHub repository manager plugin to create repositories via
 - `PLUGIN_MISS`: page is outside GitHub scope or target DOM is unavailable.
 - `Unknown page function`: extension still running old build; refresh extension and run `sync`.
 - Repository create failed server-side: check name conflict/permissions and retry with a new name.
+- Invoke receipt missing required keys: call `debugRepoForm()` then `sync/pull` before retry.
 
 ## Notes
 
 - This plugin requires signed-in GitHub session for repository creation.
 - If target page cannot be handled, plugin returns `PLUGIN_MISS` and runtime falls back.
+- Successful invoke responses use `contractVersion=llm_webop_v2`.

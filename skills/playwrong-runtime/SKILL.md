@@ -31,6 +31,10 @@ bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:<id> 
 bun apps/cli/src/index.ts call --endpoint http://127.0.0.1:7878 --page tab:<id> --state-dir .bridge --id page --fn <fn> --args '{}'
 ```
 
+6. Validate action receipt (`llm_webop_v2`) from `call` result.
+- Required keys: `ok`, `contractVersion`, `action.targetId`, `action.fn`, `page.urlBefore`, `page.urlAfter`, `recovery.retryable`, `recovery.suggestedNext`.
+- Treat missing required keys as non-conformant plugin output.
+
 ## Operations
 
 - Core bridge: `sync`, `pull`, `apply`, `call`
@@ -61,9 +65,14 @@ Use TOML config only (no env):
   - Re-run `pull` to refresh local revision before `apply`/`call`.
 - `PLUGIN_MISS`
   - Current page not matched by plugin scope or required surface not ready.
+- Non-conformant action receipt
+  - Re-run `sync -> pull`, then call plugin `debug*` page function to inspect actionable state.
+- Recoverable action error (`retryable=true`)
+  - Follow `recovery.suggestedNext`; do not blindly retry without state refresh.
 
 ## Stability Checklist
 
 - Always do `sync -> pull -> call`, then `pull` again after side effects.
 - Validate success by post-state, not only action return (URL/tree/result).
 - Prefer runtime plugin path (`/mapping-plugins/runtime/module/<pluginId>`) over ad-hoc injection.
+- Prefer plugins that return structured invoke receipts (`contractVersion=llm_webop_v2`) for deterministic agent orchestration.

@@ -35,6 +35,20 @@ sync -> pull -> call -> pull
   - Use SDK `invokeInMainWorld` only.
   - Do not create action-specific channels (`*.monaco`, `*.click`, etc.).
 - Do not trust one action result; verify by post-state transition.
+- Stability is business-semantic, not visual-only:
+  - Global `waitForStable` is necessary but insufficient for async business flows.
+  - Implement plugin `isStable(ctx)` for key routes and gate on terminal API signal (`status + payload`) plus UI loading cleared.
+- Action semantics must be explicit:
+  - Distinguish `triggered` from `completed`.
+  - Do not return pre-action snapshots as post-action result.
+  - For async actions, return deferred state and require follow-up `sync -> pull`.
+- Read operations should be dual-channel:
+  - Primary path: structured UI extraction (fast, local context).
+  - Fallback path: API-backed extraction when UI is still rendering or sparse.
+  - Always return source attribution (for example `source: "ui" | "api"`).
+- Surface diagnostics in every non-trivial read/call:
+  - Include enough fields to explain empty results (`status`, parse success, entry count, error snippet).
+  - Keep diagnostics bounded and machine-parseable.
 
 ## Debug Workflow
 
@@ -58,14 +72,19 @@ bun apps/cli/src/index.ts pull --endpoint http://127.0.0.1:7878 --page tab:<id> 
 - Intermittent timeout/disconnect
   - Distinguish transport failure from business failure.
   - Tune server grace/timeout, and add bounded retry on transient errors.
-- Search/open mismatch
-  - Prefer deterministic exact/contains matching + API fallback over fuzzy scoring-only strategy.
+- Trigger/read race condition
+  - Root cause: result read happens before business data reaches terminal state.
+  - Fix: gate with plugin `isStable` using business API status and payload readiness.
+- Match/open mismatch
+  - Prefer deterministic matching (exact/contains) + authoritative fallback channel over fuzzy scoring-only strategy.
 
 ## Stable Abstractions (Reusable)
 
 - Single generic bridge capability > many site/action special channels.
-- API-first + DOM-fallback extraction.
+- Business-ready stability > visual-ready stability.
+- Dual-channel reads (UI + API fallback) for async surfaces.
 - “Action + Post-condition” as one atomic contract.
+- Explicit action phase (`triggered` vs `completed`) in results.
 - Layered diagnostics:
   - connection
   - page match

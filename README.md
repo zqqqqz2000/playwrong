@@ -231,6 +231,57 @@ Core operations
 2. `apply` writes local editable changes back to page state.
 3. `call` executes element or page function.
 
+### LLM Web Operation Compatibility Contract (v2)
+
+To keep agent behavior deterministic across heterogeneous websites, all action results should follow a stable receipt envelope.
+
+For successful `call` actions (including plugin `invoke`):
+
+```json
+{
+  "ok": true,
+  "contractVersion": "llm_webop_v2",
+  "action": {
+    "targetId": "page|node.id",
+    "fn": "functionName"
+  },
+  "page": {
+    "urlBefore": "https://example.com/before",
+    "urlAfter": "https://example.com/after"
+  },
+  "diagnostics": {
+    "usedSelector": "optional selector or strategy hint",
+    "domChanged": true
+  },
+  "recovery": {
+    "retryable": true,
+    "suggestedNext": "sync_then_pull"
+  },
+  "data": {
+    "pluginSpecific": "payload"
+  }
+}
+```
+
+For failures, return a typed error at the boundary (or throw a plugin error that maps to one):
+
+```json
+{
+  "ok": false,
+  "error_code": "NOT_FOUND|NOT_VISIBLE|DETACHED|NAVIGATION_TIMEOUT|BLOCKED_BY_MODAL|PLUGIN_MISS|ACTION_FAIL",
+  "retryable": true,
+  "suggestedNext": "retry_same_action|sync_then_pull|close_modal_then_retry",
+  "message": "short actionable reason"
+}
+```
+
+Compatibility rules:
+
+- Keep `pull -> apply/call -> pull` as the default stabilization loop.
+- Prefer id-based actions and stable references over repeated free-form selector exploration.
+- Every plugin should expose at least one non-side-effect `debug*` page function to surface current DOM/actionability context.
+- Recovery must be explicit: include whether retry is safe and what the next step should be.
+
 Conflict rule
 
 - `REV_MISMATCH` means local state is stale
